@@ -72,10 +72,24 @@ install(TARGETS open_manipulator_x_hello_moveit omy_f3m_hello_moveit omy_3m_hell
 install(PROGRAMS
   scripts/shape_detector_node.py
   scripts/omx_trajectory_controller_node.py
+  scripts/omx_kinematics.py
+  scripts/stock_monitor_node.py
+  scripts/stock_task_manager_node.py
+  scripts/stock_calibrate.py
+  scripts/stock_teach.py
+  scripts/stock_reach_check.py
+  scripts/stock_jog.py
+  scripts/beagle_navigation.py
+  scripts/beagle_bridge_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
-install(DIRECTORY launch images
+# Beagle driving primitives vendored from the MIT licensed course package.
+install(DIRECTORY scripts/beagle_lib
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(DIRECTORY launch images config
   DESTINATION share/${PROJECT_NAME}
 )
 

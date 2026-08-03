@@ -1,0 +1,62 @@
+# Routes the Beagle drives between the two manipulator stations.
+#
+# These are scripted moves rather than a planned path: the robot only ever
+# shuttles between two fixed bays, so dead reckoning plus a docking step that
+# squares up against the bay wall is more repeatable than map based navigation,
+# and needs no map to be built or maintained.
+#
+# The distances below are placeholders. Measure them on site, then tune with:
+#   python3 beagle_navigation.py --scene corridor        # logic check, no robot
+#   ros2 topic pub --once /beagle/goto std_msgs/String "{data: station_b}"
+
+robot:
+  # Wheel command percentages. The Beagle is small and light; going faster than
+  # about 20 makes the docking approach overshoot.
+  cruise_speed: 18.0
+  turn_speed: 11.0
+  # Wheel percent applied per degree of heading error while driving straight.
+  heading_gain: 0.6
+  # Multiplier turning raw encoder counts into millimetres. The simulator
+  # already reports millimetres. On the real Beagle, drive a measured 1.0 m,
+  # read the encoders, and set this to 1000 / (encoder delta).
+  encoder_scale: 1.0
+  # Never exceed this wheel percentage, whatever a route asks for.
+  max_speed: 25.0
+
+# Where the Beagle sits when it has nothing to do.
+home_station: station_a
+
+stations:
+  station_a:
+    description: Warehouse side. OMX-F #1 loads a part onto the tray here.
+  station_b:
+    description: Destination side. OMX-F #2 unloads the tray here.
+
+# Steps are run in order. Available actions:
+#   forward / backward  distance_m, optional speed
+#   turn                degrees, positive is counter-clockwise
+#   approach            target_mm - creep until the wall ahead is this far away
+#   square              tolerance_mm - rotate until the wall ahead is square on
+#   centre              tolerance_mm - equalise front and rear distance
+#   wait                seconds
+#
+# End every route with approach then square: together they discard whatever
+# error the drive accumulated, which is what lets the arm find the tray each
+# time. Do not use centre for docking - it equalises front against rear, which
+# pulls the robot back to the middle of the room and undoes the approach.
+routes:
+  station_a->station_b:
+    - {action: backward, distance_m: 0.15}
+    - {action: turn, degrees: -90}
+    - {action: forward, distance_m: 1.20}
+    - {action: turn, degrees: 90}
+    - {action: approach, target_mm: 150}
+    - {action: square, tolerance_mm: 15}
+
+  station_b->station_a:
+    - {action: backward, distance_m: 0.15}
+    - {action: turn, degrees: 90}
+    - {action: forward, distance_m: 1.20}
+    - {action: turn, degrees: -90}
+    - {action: approach, target_mm: 150}
+    - {action: square, tolerance_mm: 15}

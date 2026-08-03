@@ -1,0 +1,81 @@
+# Layout for the stock replenishment demo.
+#
+# All robot coordinates are in metres in the link0 (base) frame:
+#   +x forward from the base, +y to the robot's left, +z up.
+#
+# Measure these once with scripts/stock_teach.py, which jogs nothing but simply
+# reports the current end effector position so you can drive the arm by hand
+# (torque off) and record where the bins and the warehouse actually are.
+
+workspace:
+  # Single via point the arm passes through between picking and placing. It is
+  # pulled in close to the base on purpose: pointing the gripper straight down
+  # puts the wrist 0.12 m above the target, so the arm's reach shrinks sharply
+  # with height. At z=0.15 it only reaches 0.22 m from the base, at z=0.20 just
+  # 0.17 m. Run scripts/stock_reach_check.py after editing any coordinate here.
+  transit: {x: 0.15, y: 0.0, z: 0.15}
+  # Height the gripper hovers above a target before descending onto it.
+  hover_height: 0.06
+  # Approach angle of the gripper, in degrees. -90 points straight down.
+  approach_pitch_deg: -90.0
+  # Roll of the gripper about its approach axis, in degrees.
+  approach_roll_deg: 0.0
+  # Pose the arm returns to between jobs. Keep it out of the camera's view of
+  # the bins, otherwise the arm occludes what the monitor is trying to see.
+  home: {x: 0.124, y: 0.0, z: 0.15}
+
+  # Hard limits; every waypoint is checked against these at startup.
+  limits:
+    x: [0.05, 0.28]
+    y: [-0.20, 0.20]
+    z: [0.02, 0.22]
+
+  # Seconds allowed for each kind of motion. Slower is safer for a first run.
+  durations:
+    transit: 3.0
+    approach: 2.0
+    descend: 2.0
+    gripper: 1.0
+
+# Measured on the real gripper by commanding a joint value and reading the gap
+# between the finger faces with a ruler:
+#
+#     0.3 -> 40 mm      0.5 -> 60 mm      0.8 -> 90 mm
+#
+# which fits exactly:   gap_mm = 100 * joint + 10
+#     so               joint  = (gap_mm - 10) / 100
+#
+# Set open just wider than the part - swinging the jaws all the way out sweeps
+# a wide arc and knocks over neighbouring parts in the bin. Set closed NARROWER
+# than the part, so the fingers stall against it and grip; max_effort keeps that
+# from becoming a crushing force.
+#
+# Values below suit a 30 mm part: open to 50 mm, close to 25 mm.
+gripper:
+  open_position: 0.40
+  closed_position: 0.15
+  max_effort: 10.0
+
+# Where replenishment parts are stored. They are consumed in order; once the
+# list is exhausted the node reports that the warehouse is empty.
+warehouse:
+  pick_points:
+    - {x: 0.19, y: -0.13, z: 0.035}
+    - {x: 0.19, y: -0.08, z: 0.035}
+    - {x: 0.15, y: -0.13, z: 0.035}
+    - {x: 0.15, y: -0.08, z: 0.035}
+
+# The stock bins being monitored.
+#   place: where the gripper releases a part into that bin, in robot coordinates.
+#   roi:   the bin's rectangle in the camera image [x1, y1, x2, y2], in pixels.
+#          Fill this in with scripts/stock_calibrate.py.
+bins:
+  - id: bin1
+    place: {x: 0.19, y: 0.11, z: 0.05}
+    roi: [80, 90, 200, 210]
+  - id: bin2
+    place: {x: 0.19, y: 0.04, z: 0.05}
+    roi: [210, 90, 330, 210]
+  - id: bin3
+    place: {x: 0.19, y: -0.03, z: 0.05}
+    roi: [340, 90, 460, 210]
