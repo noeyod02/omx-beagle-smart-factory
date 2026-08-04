@@ -62,10 +62,19 @@ def collect_points(layout):
         ('home', workspace['home'], False),
         ('transit', workspace['transit'], False),
     ]
-    for index, point in enumerate(layout['warehouse']['pick_points']):
+    # A station has only the places it does: the warehouse arm has no bins and
+    # the destination arm has no warehouse, so neither section is required.
+    warehouse = (layout.get('warehouse') or {}).get('pick_points') or []
+    for index, point in enumerate(warehouse):
         points.append((f'warehouse[{index}]', point, True))
-    for entry in layout['bins']:
+    for entry in layout.get('bins') or []:
         points.append((f"{entry['id']}.place", entry['place'], True))
+    # The one point both arms of a relay have to reach, and the one worth
+    # checking hardest: it is measured off a docked carrier rather than off
+    # something bolted down.
+    carrier = (layout.get('carrier') or {}).get('transfer')
+    if carrier is not None:
+        points.append(('carrier', carrier, True))
 
     resolved = []
     for name, point, has_hover in points:

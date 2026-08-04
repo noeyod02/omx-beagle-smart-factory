@@ -387,21 +387,145 @@ ros2 topic echo /beagle/state
 
 ---
 
-## 6단계 · OMX-F 2대 동시 (아직 코드 수정 필요)
+## 6단계 · OMX-F 2대 동시
 
-지금 런치 파일로 2대를 동시에 띄우면 **노드 이름과 토픽이 충돌합니다.** 둘 다
-`/arm_controller`, `/joint_states`를 쓰기 때문입니다.
+두 팔은 **네임스페이스로 분리**해서 띄웁니다. `/station_a`, `/station_b` 아래로
+들어가므로 컨트롤러도 토픽도 겹치지 않습니다.
 
-네임스페이스 분리(`/omx_a`, `/omx_b`) 작업이 필요하며 **아직 하지 않았습니다.**
-1대씩 검증이 끝나면 알려주세요. 그때 작업하겠습니다.
+```
+/station_a/arm_controller/...      /station_b/arm_controller/...
+/station_a/stock/transfer          /station_b/stock/transfer
+```
+
+TF 프리픽스(`prefix:=`)는 **쓰지 않습니다.** 프리픽스를 붙이면 조인트 이름이
+`a_joint1`처럼 바뀌는데, 이 데모의 역기구학은 조인트를 이름으로 지정하기 때문에
+그대로 깨집니다. 컨트롤러 설정이 `/**:` 와일드카드라 네임스페이스만으로 충분합니다.
+
+### 포트 지정 ★주의
+
+두 보드 모두 OpenRB-150으로 잡히고, `/dev/ttyACM0`과 `/dev/ttyACM2`는 **부팅할 때마다
+서로 바뀝니다.** 반드시 by-id 경로로 넘기세요.
+
+```bash
+ls -l /dev/serial/by-id/
+```
+
+### 레이아웃은 팔마다 따로
+
+좌표는 각 팔의 베이스 기준이라 두 파일이 공유하는 숫자가 하나도 없습니다.
+
+| 파일 | 들어가는 것 |
+|---|---|
+| `config/stock_layout_a.yaml` | 창고 집는 점, 비글 트레이 놓는 점 |
+| `config/stock_layout_b.yaml` | 비글 트레이 집는 점, 빈(최종 목적지) 놓는 점 + 카메라 ROI |
+
+트레이 좌표(`carrier.transfer`)는 **비글을 실제로 도킹시켜 놓고** 재야 합니다.
+줄자로 "베이가 여기쯤일 것이다"를 재면 안 됩니다 — 도킹 스텝의 존재 이유가 트레이를
+매번 같은 자리에 세우는 것이고, 이 좌표는 딱 그만큼만 정확합니다.
+
+`stock_reach_check.py`는 이제 `carrier` 지점도 검사합니다. 두 파일 모두 돌리세요.
+
+```bash
+python3 stock_reach_check.py ../config/stock_layout_a.yaml
+python3 stock_reach_check.py ../config/stock_layout_b.yaml
+```
 
 ---
 
-## 7단계 · 전체 미션 연결 (미착수)
+## 7단계 · 전체 미션 연결
 
-A에서 적재 → 비글 이동 → B에서 하역까지 하나로 묶는 오케스트레이터와, 출발 전
-사람 승인을 받는 게이트가 아직 없습니다. 위 단계들이 각각 확인된 뒤에 만드는 것이
-순서상 맞습니다.
+`stock_relay_node.py`가 세 기계를 한 작업으로 묶습니다.
+
+```
+1. A의 팔이 창고에서 부품을 꺼내 비글 트레이에 올린다
+2. 비글이 A 베이 → B 베이로 이동한다
+3. B의 팔이 트레이에서 부품을 집어 빈 칸(최종 목적지)에 넣는다
+4. 비글이 A 베이로 돌아온다
+```
+
+### 인터록
+
+트레이를 신뢰로 잡지 않습니다. 어느 팔이든 움직이기 전에 비글이 `ready_for_arm`을
+보고해야 하고, 비글은 **알려진 스테이션에 정차 중일 때만** 그렇게 보고합니다.
+베이 앞에서 멈춰 선 비글은 스테이션 이름이 빈 문자열이 되므로 그 구간은 아예
+시작되지 않습니다. 반대 방향도 같습니다 — 작업 중인 팔이 홈으로 돌아갔다고
+보고하기 전에는 비글을 출발시키지 않습니다.
+
+목적지 빈 이름은 **출발 전에** 검사합니다. 하역 구간에서 알게 되면 부품은 이미
+창고에서 나와 트레이에 실려 반대편까지 간 뒤라 그대로 방치됩니다.
+
+### 실행
+
+```bash
+ros2 launch open_manipulator_playground omx_stock_relay.launch.py \
+  port_a:=/dev/serial/by-id/usb-ROBOTIS_OpenRB-150_<A>-if00 \
+  port_b:=/dev/serial/by-id/usb-ROBOTIS_OpenRB-150_<B>-if00
+```
+
+작업 요청 (채울 빈 이름):
+
+```bash
+ros2 topic pub --once /stock/refill_request std_msgs/String "{data: bin2}"
+ros2 topic echo /stock/relay_state
+```
+
+### 하드웨어 없이 먼저 보기 ★권장
+
+팔도 비글도 없이 전 구간을 그대로 돌려볼 수 있습니다. 실물 루트 파일은 아직
+플레이스홀더라 도킹에서 실패하므로(그리고 릴레이는 그걸 옳게 거부하므로),
+시뮬레이터 치수에 맞춘 루트를 쓰세요.
+
+```bash
+ros2 launch open_manipulator_playground omx_stock_relay.launch.py \
+  use_mock_hardware:=true start_camera:=false beagle_dry_run:=true \
+  route_file:=$(ros2 pkg prefix --share open_manipulator_playground)/config/beagle_route_sim.yaml
+```
+
+한 건이 약 2분 10초 걸립니다 (적재 21초 · 이동 40초 · 하역 21초 · 복귀 47초).
+
+### 실패했을 때
+
+어느 구간이든 실패하거나 시간이 초과되면 릴레이는 **그 자리에 멈춘 채** 아무것도
+움직이지 않습니다. 사람이 셀을 확인한 뒤 풀어줘야 합니다.
+
+```bash
+ros2 topic pub --once /stock/relay_reset std_msgs/Empty {}
+```
+
+### 나중에 뭔가 바뀌면 어디를 고치나
+
+셀은 계속 바뀝니다. 아래는 전부 **설정 파일**이라 코드를 건드릴 일이 없고,
+`colcon build --symlink-install`로 빌드해 두었으므로 **리빌드도 필요 없습니다** —
+파일을 고치고 노드를 다시 띄우면 그만입니다.
+
+| 바뀐 것 | 고칠 곳 |
+|---|---|
+| 비글 이동 거리 · 베이 배치 | `config/beagle_route.yaml` → `routes` |
+| 트레이 크기·높이가 바뀜 | 두 레이아웃의 `carrier.transfer` (**A와 B 각각 다시 측정**) |
+| 트레이 도킹 거리 | `beagle_route.yaml` 각 경로 끝의 `approach.target_mm` |
+| 부품 크기가 바뀜 | 두 레이아웃의 `gripper.open_position` / `closed_position`<br>`gap_mm = 100 × 값 + 10`. 닫는 값은 부품보다 **좁게** |
+| 재고함·빈 위치 | `stock_layout_a.yaml`의 `warehouse.pick_points`, `stock_layout_b.yaml`의 `bins[].place` |
+| 빈 개수가 늘거나 줆 | `stock_layout_b.yaml`의 `bins` 목록 (`place`와 `roi` 둘 다) |
+| 카메라를 옮김 | `stock_layout_b.yaml`의 `bins[].roi` → `stock_calibrate.py`로 다시 지정 |
+| 팔을 옮김 (베이스 이동) | 그 팔의 레이아웃 **전체 재측정**. 좌표가 전부 베이스 기준입니다 |
+| 팔 보드를 교체 | `omx_stock_relay.launch.py`의 `port_a` / `port_b` 기본값 |
+| 동작을 느리게/빠르게 | 두 레이아웃의 `workspace.durations` |
+
+좌표를 고쳤으면 **매번** 검사하세요. 안 닿는 점은 여기서 걸립니다.
+
+```bash
+python3 stock_reach_check.py ../config/stock_layout_a.yaml
+python3 stock_reach_check.py ../config/stock_layout_b.yaml
+```
+
+거리를 크게 바꿨을 때는 실물 전에 시뮬레이터 드라이런을 한 번 더 돌리는 편이
+안전합니다.
+
+### 아직 없는 것 · 웹 승인 게이트
+
+지금은 사람이 `refill_request`를 직접 쏘는 것이 곧 승인입니다. `auto_relay:=true`를
+주면 빈 칸을 보는 즉시 사람 없이 팔이 움직입니다 — 승인 게이트가 들어갈 자리가
+정확히 거기입니다.
 
 ---
 
@@ -415,3 +539,6 @@ A에서 적재 → 비글 이동 → B에서 하역까지 하나로 묶는 오�
 | 카메라가 팔에 가려짐 | 재고 판정은 팔이 홈에 있을 때만 수행됩니다. 홈 자세를 카메라 시야 밖으로 옮기세요 |
 | 비글이 매번 다른 곳에 섬 | `encoder_scale` 보정을 했는지, 경로가 `approach`+`square`로 끝나는지 |
 | 컨테이너 재시작 후 roboid 없음 | 0단계의 재설치 명령 참고 |
+| 릴레이가 요청을 무시함 | `ros2 topic echo /stock/relay_state` — `failed`면 리셋 필요, 빈 이름이 B의 `places`에 있는지 |
+| 릴레이가 한 구간에서 안 넘어감 | 비글이 `ready_for_arm: true`인지, 두 팔이 모두 `idle`인지. 타임아웃 로그가 무엇을 기다렸는지 알려줍니다 |
+| 2대 중 한 팔만 뜸 | 두 포트가 by-id 경로인지. `/dev/ttyACM*`는 부팅마다 바뀝니다 |

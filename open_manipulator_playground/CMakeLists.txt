@@ -75,6 +75,8 @@ install(PROGRAMS
   scripts/omx_kinematics.py
   scripts/stock_monitor_node.py
   scripts/stock_task_manager_node.py
+  scripts/stock_relay_node.py
+  scripts/stock_auto_request.py
   scripts/stock_calibrate.py
   scripts/stock_teach.py
   scripts/stock_reach_check.py

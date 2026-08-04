@@ -14,17 +14,37 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Refill empty stock bins by fetching parts from a warehouse.
+"""Move parts between named places with one arm.
 
-Listens for a bin that has been reported empty, then runs a pick and place job:
-warehouse -> the empty bin -> home.  Every waypoint is solved with the
-closed-form OMX-F kinematics in omx_kinematics.py and executed through the
-joint trajectory controller's action interface, so each motion is known to have
-finished before the next one starts.
+Every job is a pick and place between two places this arm's layout knows about,
+run as a step sequence: each motion is known to have finished before the next
+one starts.  Waypoints are solved with the closed-form OMX-F kinematics in
+omx_kinematics.py and executed through the joint trajectory controller's action
+interface.  The places are
 
-The node can be driven without any camera:
+``warehouse``
+    The stock of spare parts, consumed one point at a time.  Only station A has
+    one.
+``carrier``
+    The Beagle's tray.  Both stations reach into the same tray, from their own
+    sides and therefore at their own coordinates.
+``<bin id>``
+    A stock bin, the final destination of a part.  Only station B has these.
+
+One instance runs per arm, under that arm's namespace, reading that arm's
+layout file.  Ask for a transfer with::
+
+    ros2 topic pub --once /station_a/stock/transfer std_msgs/String \\
+        "{data: '{\\"from\\": \\"warehouse\\", \\"to\\": \\"carrier\\"}'}"
+
+For a single-arm cell the whole job is one transfer, so the older shortcut
+still works - a bin name on ``refill_request`` means warehouse to that bin::
 
     ros2 topic pub --once /stock/refill_request std_msgs/String "{data: bin2}"
+
+In a relay that shortcut is what the coordinator replaces, so launch it with
+``request_topic:=''`` and ``auto_refill:=false``: the arms then move only when
+stock_relay_node.py says the carrier is really there to reach into.
 """
 
 import json
@@ -88,6 +108,7 @@ class StockTaskManager(Node):
         self.declare_parameter('gripper_action', '/gripper_controller/gripper_cmd')
         self.declare_parameter('status_topic', '/stock/status')
         self.declare_parameter('request_topic', '/stock/refill_request')
+        self.declare_parameter('transfer_topic', '/stock/transfer')
         self.declare_parameter('state_topic', '/stock/task_state')
         self.declare_parameter('auto_refill', True)
         self.declare_parameter('cooldown_sec', 5.0)
@@ -112,6 +133,10 @@ class StockTaskManager(Node):
         self.current_job = None
         self.cooldown_until = 0.0
         self.next_pick_index = 0
+        # Identifies the running job and reports how the last one ended, so a
+        # coordinator can tell its own job's outcome from somebody else's.
+        self.job_id = 0
+        self.last_job = None
 
         self.arm_client = ActionClient(
             self, FollowJointTrajectory, self.get_parameter('arm_action').value
@@ -128,8 +153,16 @@ class StockTaskManager(Node):
         self.create_subscription(
             String, self.get_parameter('status_topic').value, self._on_status, 10
         )
+        # Left empty in a relay: there the coordinator owns the sequence, and a
+        # bare bin name has no meaning for an arm that reaches only one end of
+        # the job.
+        request_topic = self.get_parameter('request_topic').value
+        if request_topic:
+            self.create_subscription(
+                String, request_topic, self._on_request, 10
+            )
         self.create_subscription(
-            String, self.get_parameter('request_topic').value, self._on_request, 10
+            String, self.get_parameter('transfer_topic').value, self._on_transfer, 10
         )
 
         self._report_layout()
@@ -167,19 +200,31 @@ class StockTaskManager(Node):
 
         self.pick_points = [
             self._solve_target(f'warehouse[{i}]', p)
-            for i, p in enumerate(layout['warehouse']['pick_points'])
+            for i, p in enumerate((layout.get('warehouse') or {}).get('pick_points') or [])
         ]
-        if not self.pick_points:
-            raise RuntimeError('layout has no warehouse pick points')
 
         self.bins = {}
         self.bin_order = []
-        for entry in layout['bins']:
+        for entry in layout.get('bins') or []:
             bin_id = entry['id']
             self.bins[bin_id] = self._solve_target(f'{bin_id}.place', entry['place'])
             self.bin_order.append(bin_id)
-        if not self.bins:
-            raise RuntimeError('layout has no bins')
+
+        # Where this arm meets the Beagle's tray. Absent in a single-arm cell,
+        # where nothing is ever handed to a carrier.
+        carrier = layout.get('carrier') or {}
+        self.carrier = (
+            self._solve_target('carrier', carrier['transfer'])
+            if 'transfer' in carrier else None
+        )
+
+        # A station that reaches nowhere cannot be given a job, and finding
+        # that out now beats finding it out when one is asked for.
+        if not (self.pick_points or self.bins or self.carrier):
+            raise RuntimeError(
+                'layout defines no places to move between: expected at least '
+                'one of warehouse.pick_points, bins or carrier.transfer'
+            )
 
         return layout
 
@@ -220,6 +265,8 @@ class StockTaskManager(Node):
         """Log the resolved layout so the operator can sanity check it."""
         self.get_logger().info(f'home        {self.home}')
         self.get_logger().info(f'warehouse   {len(self.pick_points)} pick points')
+        if self.carrier is not None:
+            self.get_logger().info(f'carrier     tray at {self.carrier}')
         for bin_id in self.bin_order:
             self.get_logger().info(f'  {bin_id:8s} place at {self.bins[bin_id]}')
 
@@ -261,44 +308,94 @@ class StockTaskManager(Node):
 
         for entry in status.get('bins', []):
             if entry.get('state') == 'empty' and entry.get('stable'):
-                self._start_job(entry['id'])
+                self._start_transfer('warehouse', entry['id'])
                 return
 
     def _on_request(self, msg):
-        """Handle a refill asked for by hand."""
-        self._start_job(msg.data.strip())
+        """Handle a refill asked for by hand: warehouse to the named bin."""
+        self._start_transfer('warehouse', msg.data.strip())
 
-    def _start_job(self, bin_id):
-        """Begin a refill for ``bin_id`` if the arm is free to take it."""
+    def _on_transfer(self, msg):
+        """Handle a transfer between two named places, as a relay asks for."""
+        try:
+            request = json.loads(msg.data)
+            source = str(request['from'])
+            destination = str(request['to'])
+        except (json.JSONDecodeError, KeyError, TypeError):
+            self.get_logger().warn(
+                f'Ignoring malformed transfer {msg.data!r}; expected '
+                f'{{"from": "<place>", "to": "<place>"}}'
+            )
+            return
+        self._start_transfer(source, destination, request.get('id'))
+
+    def _resolve(self, name):
+        """Find the waypoint a place name stands for, at this station."""
+        if name == 'warehouse':
+            if not self.pick_points:
+                raise LookupError('this station has no warehouse')
+            if self.next_pick_index >= len(self.pick_points):
+                raise LookupError('the warehouse is empty')
+            return self.pick_points[self.next_pick_index]
+        if name == 'carrier':
+            if self.carrier is None:
+                raise LookupError('this station has no carrier point')
+            return self.carrier
+        if name in self.bins:
+            return self.bins[name]
+        raise LookupError(
+            f'unknown place {name!r}; this station knows '
+            f'{sorted(self._place_names())}'
+        )
+
+    def _place_names(self):
+        names = list(self.bin_order)
+        if self.pick_points:
+            names.append('warehouse')
+        if self.carrier is not None:
+            names.append('carrier')
+        return names
+
+    def _start_transfer(self, source, destination, job_id=None):
+        """Move a part from one named place to another, if the arm is free."""
         now = self.get_clock().now().nanoseconds / 1e9
         if self.state == STATE_COOLDOWN and now >= self.cooldown_until:
             self.state = STATE_IDLE
 
+        label = f'{source} -> {destination}'
         if self.state != STATE_IDLE:
-            self.get_logger().debug(f'Ignoring refill for {bin_id}: state is {self.state}')
-            return
-        if bin_id not in self.bins:
             self.get_logger().warn(
-                f'Unknown bin {bin_id!r}; known bins are {sorted(self.bins)}'
+                f'Ignoring {label}: state is {self.state}'
             )
-            return
-        if self.next_pick_index >= len(self.pick_points):
-            self.state = STATE_BLOCKED
-            self.get_logger().error(
-                'Warehouse is empty - refill it and restart the node to continue'
-            )
+            self._record_result(job_id, label, 'rejected', f'state is {self.state}')
             return
 
-        pick = self.pick_points[self.next_pick_index]
-        place = self.bins[bin_id]
-        self.next_pick_index += 1
+        try:
+            pick = self._resolve(source)
+            place = self._resolve(destination)
+        except LookupError as error:
+            # An empty warehouse is a cell that needs restocking, not a typo:
+            # it stops the station rather than just failing this one job.
+            if str(error) == 'the warehouse is empty':
+                self.state = STATE_BLOCKED
+                self.get_logger().error(
+                    'Warehouse is empty - refill it and restart the node to continue'
+                )
+            else:
+                self.get_logger().warn(f'Cannot run {label}: {error}')
+            self._record_result(job_id, label, 'failed', str(error))
+            return
 
-        self.current_job = bin_id
+        if source == 'warehouse':
+            self.next_pick_index += 1
+
+        self.job_id = job_id if job_id is not None else self.job_id + 1
+        self.current_job = label
         self.state = STATE_BUSY
         self.steps = self._build_steps(pick, place)
         self.step_index = 0
         self.get_logger().info(
-            f'Refilling {bin_id}: {pick.name} -> {place.name} '
+            f'Job {self.job_id}: {pick.name} -> {place.name} '
             f'({len(self.steps)} steps)'
         )
         self._run_next_step()
@@ -389,7 +486,8 @@ class StockTaskManager(Node):
 
     def _abort(self, reason):
         """Give up on the current job and park the node."""
-        self.get_logger().error(f'Refill of {self.current_job} aborted: {reason}')
+        self.get_logger().error(f'Job {self.job_id} ({self.current_job}) aborted: {reason}')
+        self._record_result(self.job_id, self.current_job, 'failed', reason)
         self.steps = []
         self.step_index = 0
         self.current_job = None
@@ -397,7 +495,8 @@ class StockTaskManager(Node):
 
     def _finish_job(self):
         """Wrap up a completed job and start the cooldown."""
-        self.get_logger().info(f'Refill of {self.current_job} complete')
+        self.get_logger().info(f'Job {self.job_id} ({self.current_job}) complete')
+        self._record_result(self.job_id, self.current_job, 'ok', None)
         self.steps = []
         self.step_index = 0
         self.current_job = None
@@ -405,6 +504,21 @@ class StockTaskManager(Node):
             self.get_clock().now().nanoseconds / 1e9 + self.cooldown_sec
         )
         self.state = STATE_COOLDOWN
+
+    def _record_result(self, job_id, label, result, error):
+        """Publish how a job ended, immediately rather than at the next tick.
+
+        A relay waits on this to decide whether the next leg may start, so it
+        carries the id it was asked with: a coordinator can then tell its own
+        job's outcome from one somebody else set off by hand.
+        """
+        self.last_job = {
+            'id': job_id,
+            'job': label,
+            'result': result,
+            'error': error,
+        }
+        self._publish_state()
 
     def _publish_state(self):
         """Broadcast what the arm is doing, so the monitor knows when to look."""
@@ -415,6 +529,9 @@ class StockTaskManager(Node):
         self.state_pub.publish(String(data=json.dumps({
             'state': self.state,
             'job': self.current_job,
+            'job_id': self.job_id,
+            'last_job': self.last_job,
+            'places': self._place_names(),
             'parts_left': max(0, len(self.pick_points) - self.next_pick_index),
             # The camera only sees the bins clearly while the arm is parked.
             'vision_clear': self.state in (STATE_IDLE, STATE_BLOCKED),

@@ -1,0 +1,50 @@
+# Routes for the simulator, not for the cell. See beagle_route.yaml for that.
+#
+# beagle_route.yaml holds the real bay-to-bay moves, and its distances are
+# placeholders until somebody measures them on site. That makes it useless for
+# checking the relay's sequencing: a route whose numbers are guesses will fail
+# its docking step, and the relay will correctly refuse to go on, so nothing
+# past the first drive ever gets exercised.
+#
+# This file fits the course package's built-in "corridor" scene instead, which
+# has known dimensions: walls at y=0.28 and y=0.68, closed at x=0.0 and x=2.3,
+# with the robot starting at (0.25, 0.46) facing +x. The two bays are simply
+# the two ends of that corridor. Every leg of the relay therefore completes,
+# and the arms, the carrier and the sequencing can be watched through with no
+# hardware attached:
+#
+#   ros2 launch open_manipulator_playground omx_stock_relay.launch.py \
+#     use_mock_hardware:=true start_camera:=false beagle_dry_run:=true \
+#     route_file:=$(ros2 pkg prefix --share open_manipulator_playground)/config/beagle_route_sim.yaml
+#
+# Do not copy these numbers into the real route file. They describe a simulated
+# corridor, not your floor.
+
+robot:
+  cruise_speed: 18.0
+  turn_speed: 11.0
+  heading_gain: 0.6
+  encoder_scale: 1.0
+  max_speed: 25.0
+
+home_station: station_a
+
+stations:
+  station_a:
+    description: The x=0 end of the corridor. Station A's arm loads the tray here.
+  station_b:
+    description: The x=2.3 end of the corridor. Station B's arm unloads it here.
+
+# The robot starts facing +x, which is station B's end, so the outbound route
+# only has to drive up and dock. Coming home it turns around first.
+routes:
+  station_a->station_b:
+    - {action: forward, distance_m: 1.60}
+    - {action: approach, target_mm: 150}
+    - {action: square, tolerance_mm: 15}
+
+  station_b->station_a:
+    - {action: turn, degrees: 180}
+    - {action: forward, distance_m: 1.60}
+    - {action: approach, target_mm: 150}
+    - {action: square, tolerance_mm: 15}

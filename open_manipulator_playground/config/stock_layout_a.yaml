@@ -1,0 +1,91 @@
+# Layout for station A: the warehouse side of the relay.
+#
+# The arm here does one thing - take a part out of the warehouse and set it on
+# the Beagle's tray. It never touches a stock bin, so this file has no bins and
+# no camera regions; station B watches those. See stock_layout_b.yaml.
+#
+# All robot coordinates are in metres in THIS arm's link0 (base) frame:
+#   +x forward from the base, +y to the robot's left, +z up.
+# Station B has its own base and therefore its own numbers. A coordinate copied
+# from one file to the other is meaningless.
+#
+# Measure these with scripts/stock_jog.py, which drives the gripper in cartesian
+# steps from the keyboard and prints the point in the form below. Point it at
+# station A's controllers - its defaults address an arm outside a namespace, so
+# without these it will not find either arm of a relay:
+#
+#   ros2 run open_manipulator_playground stock_jog.py \
+#     --arm-action /station_a/arm_controller/follow_joint_trajectory \
+#     --gripper-action /station_a/gripper_controller/gripper_cmd
+#
+# Press p over each point to record it, q to print them all as YAML.
+
+workspace:
+  # Single via point the arm passes through between picking and placing. It is
+  # pulled in close to the base on purpose: pointing the gripper straight down
+  # puts the wrist 0.12 m above the target, so the arm's reach shrinks sharply
+  # with height. At z=0.15 it only reaches 0.22 m from the base, at z=0.20 just
+  # 0.17 m. Run scripts/stock_reach_check.py after editing any coordinate here.
+  transit: {x: 0.15, y: 0.0, z: 0.15}
+  # Height the gripper hovers above a target before descending onto it.
+  hover_height: 0.06
+  # Approach angle of the gripper, in degrees. -90 points straight down.
+  approach_pitch_deg: -90.0
+  # Roll of the gripper about its approach axis, in degrees.
+  approach_roll_deg: 0.0
+  # Pose the arm returns to between jobs. Keep it clear of the bay so the
+  # Beagle can drive in and out without meeting the arm on the way.
+  home: {x: 0.124, y: 0.0, z: 0.15}
+
+  # Hard limits; every waypoint is checked against these at startup.
+  limits:
+    x: [0.05, 0.28]
+    y: [-0.20, 0.20]
+    z: [0.02, 0.22]
+
+  # Seconds allowed for each kind of motion. Slower is safer for a first run.
+  durations:
+    transit: 3.0
+    approach: 2.0
+    descend: 2.0
+    gripper: 1.0
+
+# Measured on the real gripper by commanding a joint value and reading the gap
+# between the finger faces with a ruler:
+#
+#     0.3 -> 40 mm      0.5 -> 60 mm      0.8 -> 90 mm
+#
+# which fits exactly:   gap_mm = 100 * joint + 10
+#     so               joint  = (gap_mm - 10) / 100
+#
+# Values below suit a 30 mm part: open to 50 mm, close to 25 mm.
+gripper:
+  open_position: 0.40
+  closed_position: 0.15
+  max_effort: 10.0
+
+# Where the part is set down on the Beagle's tray, in this arm's frame.
+#
+# PLACEHOLDER. Measure it with the Beagle actually docked in the bay, not with
+# a tape measure to where you think the bay is: the whole point of the docking
+# step is that the tray lands in the same place every time, and this coordinate
+# is only as good as that. Dock the Beagle, then jog the arm to the tray:
+#
+#   ros2 topic pub --once /beagle/goto std_msgs/String "{data: station_a}"
+#
+# The relay refuses to reach for the tray unless the Beagle reports
+# ready_for_arm, so a carrier parked short of the bay is never grasped into.
+carrier:
+  transfer: {x: 0.20, y: 0.0, z: 0.06}
+
+# Where replenishment parts are stored. They are consumed in order; once the
+# list is exhausted the node reports that the warehouse is empty.
+warehouse:
+  pick_points:
+    - {x: 0.19, y: -0.13, z: 0.035}
+    - {x: 0.19, y: -0.08, z: 0.035}
+    - {x: 0.15, y: -0.13, z: 0.035}
+    - {x: 0.15, y: -0.08, z: 0.035}
+
+# Station A has no stock bins of its own.
+bins: []
