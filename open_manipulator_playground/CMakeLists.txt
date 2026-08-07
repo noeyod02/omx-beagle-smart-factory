@@ -89,6 +89,7 @@ install(PROGRAMS
   scripts/beagle_encoder_scale.py
   scripts/stock_approval_node.py
   scripts/stock_arrival_node.py
+  scripts/stock_joint_jog.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

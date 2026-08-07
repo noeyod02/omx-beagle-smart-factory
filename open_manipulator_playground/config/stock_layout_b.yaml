@@ -39,7 +39,11 @@ workspace:
   # reach - re-check with scripts/stock_reach_check.py before raising it.
   hover_height: 0.03
   # Approach angle of the gripper, in degrees. -90 points straight down.
-  approach_pitch_deg: -90.0
+  # Tilted from -90 on 2026-08-07 to stretch top-down reach for the six-cell
+  # box: at bin height straight-down runs out at 0.254 m radius, -60 reaches
+  # 0.320 m. Every point below was taught at -90 and re-verified at -60 -
+  # teach any NEW point at this same pitch (stock_jog.py --pitch-deg -60).
+  approach_pitch_deg: -60.0
   # Roll of the gripper about its approach axis, in degrees.
   approach_roll_deg: 0.0
   # Pose the arm returns to between jobs. Keep it out of the camera's view of
