@@ -81,8 +81,12 @@ install(PROGRAMS
   scripts/stock_teach.py
   scripts/stock_reach_check.py
   scripts/stock_jog.py
+  scripts/stock_points.py
+  scripts/stock_camera.py
+  scripts/stock_hand_eye.py
   scripts/beagle_navigation.py
   scripts/beagle_bridge_node.py
+  scripts/beagle_encoder_scale.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

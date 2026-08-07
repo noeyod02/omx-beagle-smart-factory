@@ -16,10 +16,19 @@ robot:
   turn_speed: 11.0
   # Wheel percent applied per degree of heading error while driving straight.
   heading_gain: 0.6
-  # Multiplier turning raw encoder counts into millimetres. The simulator
-  # already reports millimetres. On the real Beagle, drive a measured 1.0 m,
-  # read the encoders, and set this to 1000 / (encoder delta).
-  encoder_scale: 1.0
+  # Multiplier turning raw encoder counts into millimetres.
+  #
+  # Measured on the real carrier with scripts/beagle_encoder_scale.py: three
+  # 5 s runs at 18% covered 2725, 2724 and 2719 counts, and the last of them
+  # measured 1210 mm on the floor. 1210 / 2719 = 0.445017, which puts all three
+  # runs within 2.7 mm of each other - tighter than the tape can be read.
+  #
+  # Only valid for the surface it was taken on. Re-measure if the cell moves to
+  # a different floor; a change of bay spacing alone does not affect it, that
+  # is distance_m below.
+  #
+  # The simulator reports millimetres directly, so it wants 1.0 instead.
+  encoder_scale: 0.445017
   # Never exceed this wheel percentage, whatever a route asks for.
   max_speed: 25.0
 
@@ -44,19 +53,79 @@ stations:
 # error the drive accumulated, which is what lets the arm find the tray each
 # time. Do not use centre for docking - it equalises front against rear, which
 # pulls the robot back to the middle of the room and undoes the approach.
+# The two bays face each other along one line, so neither leg turns: the
+# Beagle drives straight out and reverses straight back, keeping the tray
+# pointing the same way the whole time. That matters more than it looks - the
+# arm at each end reaches for the tray at a taught coordinate, and a carrier
+# that arrived rotated puts the tray somewhere that coordinate does not
+# describe.
+#
+# distance_m is UNMEASURED. Put the Beagle in bay A, drive it to bay B by hand,
+# and read the distance off the floor; approach and square then absorb whatever
+# is left over. Too short is safe, too long drives into the bay wall - so start
+# under the real figure and work up.
 routes:
+  # 0.45 m measured bay to bay, wheel axis to wheel axis.
+  #
+  # No docking step, which the guidance above says every route should end with.
+  # The reason it says so is that dead reckoning drifts over a long drive, and
+  # over 0.45 m it barely drifts at all: the three calibration runs agreed to
+  # 0.22%, which is about 1 mm at this distance - inside what approach and
+  # square were there to recover.
+  #
+  # The other reason is that approach creeps forward until something sits
+  # 150 mm ahead, and whether anything does at bay B is UNVERIFIED. With no
+  # wall in front it does not stop at the bay; it keeps going until it finds
+  # something. Check what the lidar reads ahead with the carrier parked at bay
+  # B, and if there is a wall, put back:
+  #
+  #     - {action: approach, target_mm: 150}
+  #     - {action: square, tolerance_mm: 15}
+  #
+  # and shorten distance_m so approach has room to close the last of it.
+  # 0.67 m rather than the 0.45 first measured bay to bay. The extra 220 mm is
+  # not a correction to the measurement - it parks the carrier that much
+  # further into bay B, which brings the tray in towards station B's arm.
+  #
+  # Settled by eye in three goes on 2026-08-06 - 0.50, then +50 mm, then
+  # +120 mm - watching the tray against the arm each time. The carrier
+  # consistently overshoots by about 1%, so the figure the arm is taught
+  # against is what this route produces on the floor, not what is written
+  # here.
+  #
+  # That arm reaches the tray almost fully stretched, and on 2026-08-06 its
+  # wrist joint tripped a Dynamixel overload error holding that pose - after
+  # which it silently lagged its commands by 27 degrees and put the gripper
+  # 56 mm from where it was told to go. Pulling the tray in is what takes the
+  # load off; every millimetre closer to the base is reach the wrist is not
+  # having to hold out against gravity.
+  #
+  # Station B's carrier.transfer has to be re-taught at whatever pose this
+  # leaves, since it describes where the tray stops rather than where the bay
+  # is. The return leg matches this figure so a round trip comes back to the
+  # same place; if one is changed the other has to be.
   station_a->station_b:
-    - {action: backward, distance_m: 0.15}
-    - {action: turn, degrees: -90}
-    - {action: forward, distance_m: 1.20}
-    - {action: turn, degrees: 90}
-    - {action: approach, target_mm: 150}
-    - {action: square, tolerance_mm: 15}
+    - {action: forward, distance_m: 0.67}
 
+  # UNSOLVED, and deliberately left without a docking step rather than given
+  # one that does nothing. approach and square both read the lidar ahead of the
+  # robot, and a carrier that reversed into bay A is facing down the corridor,
+  # where there is no bay wall to square against - so the pair would creep
+  # toward whatever is at the far end instead of docking.
+  #
+  # Turning 180 would give them a wall, at the cost of the thing this layout
+  # was chosen for: the tray would arrive rotated, and carrier.transfer at
+  # station A describes an unrotated tray. The load on the NEXT job is what
+  # breaks, not this leg.
+  #
+  # So this leg arrives on dead reckoning alone, and its error accumulates job
+  # over job. Fine for driving the part across once; not fine for leaving the
+  # cell cycling unattended. Fixing it properly means a rear-facing dock, which
+  # the lidar can support - cardinal_distances already reports the distance
+  # behind - but no action uses it yet.
+  # Matches the outbound leg, so a round trip ends where it started. Measured
+  # on 2026-08-06 at the old 0.45: the carrier covered -0.464 m with -0.3 deg
+  # of heading drift, a good deal straighter than the -2.9, +3.6 and -5.4 deg
+  # this leg had been running the day before.
   station_b->station_a:
-    - {action: backward, distance_m: 0.15}
-    - {action: turn, degrees: 90}
-    - {action: forward, distance_m: 1.20}
-    - {action: turn, degrees: -90}
-    - {action: approach, target_mm: 150}
-    - {action: square, tolerance_mm: 15}
+    - {action: backward, distance_m: 0.67}

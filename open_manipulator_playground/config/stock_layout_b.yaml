@@ -21,14 +21,23 @@
 # Press p over each point to record it, q to print them all as YAML.
 
 workspace:
-  # Single via point the arm passes through between picking and placing. It is
-  # pulled in close to the base on purpose: pointing the gripper straight down
-  # puts the wrist 0.12 m above the target, so the arm's reach shrinks sharply
-  # with height. At z=0.15 it only reaches 0.22 m from the base, at z=0.20 just
-  # 0.17 m. Run scripts/stock_reach_check.py after editing any coordinate here.
-  transit: {x: 0.15, y: 0.0, z: 0.15}
+  # Single via point the arm passes through between picking and placing.
+  # Taught 2026-08-06 as 'middle', deliberately high (z=0.178): the carry from
+  # the tray to the box passes over the Beagle's wheel, and at the old low
+  # transit the part clipped it. This point lifts the part as high as the arm
+  # can hold it at this radius before it swings across. Only reachable at all
+  # because the arm base was moved 2-3 cm toward the bay the same day - at the
+  # old base position z=0.178 this far out had no IK solution.
+  # Run scripts/stock_reach_check.py after editing any coordinate here.
+  transit: {x: 0.176, y: -0.040, z: 0.178}
   # Height the gripper hovers above a target before descending onto it.
-  hover_height: 0.06
+  #
+  # 0.03. This was squeezed to 0.008 while the tray sat at radial 0.215,
+  # where the solver had nothing left above the grasp; moving the arm base
+  # 2-3 cm toward the bay (2026-08-06) brought the tray to 0.194 and bought
+  # the height back. Every centimetre of hover still costs about 3 cm of
+  # reach - re-check with scripts/stock_reach_check.py before raising it.
+  hover_height: 0.03
   # Approach angle of the gripper, in degrees. -90 points straight down.
   approach_pitch_deg: -90.0
   # Roll of the gripper about its approach axis, in degrees.
@@ -50,39 +59,84 @@ workspace:
     descend: 2.0
     gripper: 1.0
 
-# See stock_layout_a.yaml for how these numbers were measured.
-# Values below suit a 30 mm part: open to 50 mm, close to 25 mm.
+# See stock_layout_a.yaml for how the conversion was measured:
+#     gap_mm = 100 * joint + 10
+#
+# Both values replace the 0.40/0.15 this file started with, which suited a
+# 30 mm part that is not the part this cell moves.
+#
+# open_position matches station A, which was set against the real part. 50 mm
+# was not enough to go around it: the jogger had the jaws at 90 mm to clear it
+# on the tray, so a job starting from 50 mm would have brought the fingers down
+# onto the part rather than around it.
+#
+# closed_position is the one to watch. Station A commands 0.15 - 25 mm - at a
+# part that measures about 38 mm under grasp, so it spends the whole carry
+# squeezing 13 mm past the part instead of holding it, and a smooth face
+# eventually squirts out. 0.27 asks for 37 mm, which stalls against the part
+# with a millimetre of squeeze rather than crushing through it.
+#
+# 0.32 comes from this gripper closing on this part at this station, on
+# 2026-08-06: commanded 0.27, the jaws stalled at 0.34 - 44 mm - and held there
+# for the nine seconds of the carry. Then the width slid the rest of the way to
+# the commanded 0.27 in 50 ms and the part was gone. Seven millimetres of
+# squeeze past a smooth face is all it takes.
+#
+# So the number to command is just under the width the part actually stops the
+# jaws at, not a width derived from the part elsewhere: station A grips the
+# same part lying in the warehouse box and stalls at 0.288, because it takes
+# hold of it in a different place.
+#
+# Check it against the width trace: from the close to the release the reading
+# should sit near 0.34 and not move. A reading that reaches the commanded 0.32
+# means the jaws closed on nothing, or on nothing any more.
 gripper:
-  open_position: 0.40
-  closed_position: 0.15
+  open_position: 0.76    # 86 mm
+  closed_position: 0.32  # 42 mm
   max_effort: 10.0
 
 # Where the part is lifted off the Beagle's tray, in THIS arm's frame.
 #
-# PLACEHOLDER. Measure it with the Beagle docked in station B's bay. The number
-# will differ from station A's even if the two bays look identical, because it
-# is measured from a different base.
+# Taught 2026-08-06 as 'pgrip3' with scripts/stock_jog.py, against the pose
+# the 0.67 m route actually leaves the carrier in, and after the arm base was
+# moved 2-3 cm toward the bay - the move that pulled the tray in from radial
+# 0.215 to 0.194 and gave the carry its height back. Any earlier B coordinate
+# predates that move and describes a base that no longer exists. It shares
+# nothing with station A's tray point even though it is the same tray: the
+# two are measured from different bases.
+#
+# Valid only for the pose the drive leaves the carrier in. The route to bay B
+# ends on dead reckoning with no docking step, so a carrier that arrives
+# rotated puts the tray somewhere this coordinate does not describe - which is
+# what a failed grasp here will mean before anything else.
 #
 # The relay refuses to reach for the tray unless the Beagle reports
 # ready_for_arm, so a carrier parked short of the bay is never grasped into.
 carrier:
-  transfer: {x: 0.20, y: 0.0, z: 0.06}
+  transfer: {x: 0.194, y: 0.000, z: 0.140}
 
 # Station B fetches from the carrier, never from a warehouse.
 warehouse:
   pick_points: []
 
-# The stock bins being monitored - the final destination of every part.
-#   place: where the gripper releases a part into that bin, in robot coordinates.
-#   roi:   the bin's rectangle in the camera image [x1, y1, x2, y2], in pixels.
+# The destination box - where every part that arrives on the carrier ends up.
+#   place: where the gripper releases a part into it, in robot coordinates.
+#   roi:   the box's rectangle in the camera image [x1, y1, x2, y2], in pixels.
 #          Fill this in with scripts/stock_calibrate.py.
+#
+# One entry, not three. This cell has a single destination box at station B,
+# and the two extra bins this file used to carry were invented coordinates that
+# no gripper had ever been driven to - they passed the reach check and would
+# have failed at the box.
 bins:
+  # Re-taught 2026-08-06 (fourth pass, after the arm base moved) as 'drop',
+  # down inside the box rather than releasing from the air above it, so the
+  # part is set in rather than dropped. The jaws open to 86 mm at this depth,
+  # so the box mouth has to clear that; it was taught with the gripper in the
+  # box, so it does.
+  #
+  # The roi is still a placeholder: the camera at this station has not been
+  # aimed or calibrated, so nothing reads this yet.
   - id: bin1
-    place: {x: 0.19, y: 0.11, z: 0.05}
+    place: {x: 0.056, y: -0.180, z: 0.073}
     roi: [80, 90, 200, 210]
-  - id: bin2
-    place: {x: 0.19, y: 0.04, z: 0.05}
-    roi: [210, 90, 330, 210]
-  - id: bin3
-    place: {x: 0.19, y: -0.03, z: 0.05}
-    roi: [340, 90, 460, 210]

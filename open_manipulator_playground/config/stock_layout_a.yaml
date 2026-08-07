@@ -28,7 +28,18 @@ workspace:
   # 0.17 m. Run scripts/stock_reach_check.py after editing any coordinate here.
   transit: {x: 0.15, y: 0.0, z: 0.15}
   # Height the gripper hovers above a target before descending onto it.
-  hover_height: 0.06
+  # Cut from 0.06 to fit the taught points rather than because 0.03 is enough
+  # lift. Both leave less headroom than 0.06 wants: the pick can rise 56 mm
+  # before the arm runs out of reach and the tray point only 32 mm, because a
+  # gripper held straight down needs its wrist 0.12 m higher still, and the
+  # tray sits high at z=0.155.
+  #
+  # This is the height a part is lifted to before the arm carries it sideways,
+  # so it has to clear the warehouse box wall. If the wall is taller than
+  # 30 mm the part will catch on it. The fix is not a bigger number here -
+  # there is no room for one - but a lower tray: at z=0.110 the same point
+  # allows 78 mm.
+  hover_height: 0.03
   # Approach angle of the gripper, in degrees. -90 points straight down.
   approach_pitch_deg: -90.0
   # Roll of the gripper about its approach axis, in degrees.
@@ -58,10 +69,21 @@ workspace:
 # which fits exactly:   gap_mm = 100 * joint + 10
 #     so               joint  = (gap_mm - 10) / 100
 #
-# Values below suit a 30 mm part: open to 50 mm, close to 25 mm.
+# Values below were set against the real part with scripts/stock_jog.py, closing
+# the jaws on it rather than measuring it: open to 86 mm, close to 25 mm.
+# closed_position is 0.27 rather than the 0.15 this cell ran on 2026-08-05.
+# 0.15 asks for 25 mm at a part that stops the jaws at 0.288 - 38 mm - so the
+# gripper spent the whole carry squeezing 13 mm past the part instead of
+# holding it, and on one of two runs the part squirted out between lifting it
+# off the warehouse floor and setting it on the tray. 0.27 stalls against the
+# part with about a millimetre of squeeze.
+#
+# Station B commands 0.32 for the same part, because it takes hold of it lying
+# on the tray rather than lying in the box and stalls at a different width.
+# Each station's number belongs to its own grasp; neither is the part's size.
 gripper:
-  open_position: 0.40
-  closed_position: 0.15
+  open_position: 0.76
+  closed_position: 0.27
   max_effort: 10.0
 
 # Where the part is set down on the Beagle's tray, in this arm's frame.
@@ -76,16 +98,28 @@ gripper:
 # The relay refuses to reach for the tray unless the Beagle reports
 # ready_for_arm, so a carrier parked short of the bay is never grasped into.
 carrier:
-  transfer: {x: 0.20, y: 0.0, z: 0.06}
+  # Measured with the real Beagle docked in bay A and scripts/stock_jog.py.
+  # Valid only for that parked pose: the return leg has no docking step, so
+  # nudging the carrier after this was taken puts the tray somewhere this does
+  # not describe.
+  transfer: {x: 0.054, y: -0.175, z: 0.155}
 
 # Where replenishment parts are stored. They are consumed in order; once the
 # list is exhausted the node reports that the warehouse is empty.
 warehouse:
+  # One measured spot, listed twice. The list is a consumption budget as much
+  # as a set of positions: the task manager takes entries in order and stops
+  # the station when they run out, so the number of entries is the number of
+  # relays a single launch may run. Both entries are the same coordinate
+  # because there is one spot in the box a part is placed at - a person puts
+  # the next part there between runs; nothing checks that they have, so a
+  # second run against an unfed spot closes on air and reports success (see
+  # the width trace for the only honest verdict). Replace this list with
+  # camera-supplied points once scripts/stock_hand_eye.py has mapped pixels
+  # to this frame.
   pick_points:
-    - {x: 0.19, y: -0.13, z: 0.035}
-    - {x: 0.19, y: -0.08, z: 0.035}
-    - {x: 0.15, y: -0.13, z: 0.035}
-    - {x: 0.15, y: -0.08, z: 0.035}
+    - {x: 0.214, y: 0.000, z: 0.090}
+    - {x: 0.214, y: 0.000, z: 0.090}
 
 # Station A has no stock bins of its own.
 bins: []

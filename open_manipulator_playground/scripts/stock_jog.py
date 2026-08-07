@@ -35,13 +35,33 @@ Keys:
     a / d    left / right     (+y / -y)
     r / f    up / down        (+z / -z)
     [ / ]    smaller / bigger step
-    o / c    gripper open / close
-    p        print the current point as a layout entry
+    o / c    move the jaws to the open / closed width
+    - / =    closed width narrower / wider
+    _ / +    open width narrower / wider
+    p        save the current point under a name
+    l        list the points saved so far
     h        return to the start point
     q        quit
+
+Both widths are shown as the gap between the finger faces in millimetres, and
+the jaws move to whichever one you are changing, so each can be sized against
+the real part.  If either is changed, quitting prints the gripper block for
+config/stock_layout.yaml alongside the recorded points.
+
+Saved points
+    Each p asks for a name and writes the point straight into the points file
+    (--points-file, ~/.ros/stock_points.yaml by default), so a session can hold
+    as many points as you care to teach and none of them are lost if the tool
+    is killed rather than quit.  A name that is already in the file overwrites
+    that point, which is how a point gets corrected.
+
+    l lists what the file holds, so a name is not reused by accident.  The
+    format is scripts/stock_points.py, plain YAML, and one file per station:
+    the coordinates are in that arm's own frame and mean nothing at the other.
 """
 
 import argparse
+import contextlib
 import math
 import sys
 import termios
@@ -53,6 +73,7 @@ from omx_kinematics import inverse_kinematics, JOINT_NAMES
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
+import stock_points
 from trajectory_msgs.msg import JointTrajectoryPoint
 
 STEP_SIZES = [0.001, 0.002, 0.005, 0.010, 0.020, 0.050]
@@ -61,6 +82,40 @@ DEFAULT_STEP_INDEX = 2
 # Slow: this is used with hands near the robot.
 MOVE_DURATION = 1.0
 FIRST_MOVE_DURATION = 4.0
+
+# How long past a move's own duration to keep waiting before calling it stuck.
+# Generous, because a controller under load can report late and giving up on a
+# move that was going to arrive is worse than waiting another second.
+MOVE_GRACE = 4.0
+# A gripper close ends by stalling against the part rather than by arriving, so
+# it is waited out rather than expected to report.
+GRIPPER_TIMEOUT = 5.0
+# How long to wait for the controller to say anything at all - accept a goal,
+# acknowledge a cancellation. Unrelated to how long a move takes.
+ANSWER_TIMEOUT = 5.0
+
+# Gripper joint values, which the finger gap follows as gap_mm = 100*value + 10.
+# The limits are the ends of the range the gripper was measured over, 10 mm to
+# 90 mm; the step is 2 mm, fine enough to close on a part without crushing it.
+GRIPPER_MIN = 0.0
+GRIPPER_MAX = 0.8
+GRIPPER_STEP = 0.02
+
+
+def gap_mm(joint):
+    """Finger gap for a gripper joint value, from the measurement in the layout."""
+    return 100.0 * joint + 10.0
+
+
+def notice(text):
+    """Print a message over the status line, clearing what the line held.
+
+    Messages are shorter than the status line they land on, so without the
+    erase the tail of a stale position stays on screen next to them - and a
+    recorded coordinate sitting beside leftover digits is worth avoiding.
+    """
+    erase = '\x1b[K' if sys.stdout.isatty() else ''
+    print(f'\r  {text}{erase}')
 
 
 class Jogger(Node):
@@ -82,10 +137,15 @@ class Jogger(Node):
         self.gripper_open = args.gripper_open
         self.gripper_closed = args.gripper_closed
         self.gripper_effort = args.gripper_effort
+        # Kept so the report can stay quiet about widths that were never touched.
+        self.gripper_start = (self.gripper_open, self.gripper_closed)
 
         self.start = (args.x, args.y, args.z)
         self.point = list(self.start)
         self.step_index = DEFAULT_STEP_INDEX
+        self.points_file = args.points_file
+        # Names saved this session, in order, for the report at the end.  The
+        # file itself holds everything ever saved, this session or not.
         self.recorded = []
 
     @property
@@ -110,11 +170,11 @@ class Jogger(Node):
         for axis, value in (('x', x), ('y', y), ('z', z)):
             low, high = self.limits[axis]
             if not low <= value <= high:
-                print(f'\r  refused: {axis}={value:.3f} outside [{low}, {high}]      ')
+                notice(f'refused: {axis}={value:.3f} outside [{low}, {high}]')
                 return None
         joints = inverse_kinematics(x, y, z, pitch=self.pitch, roll=self.roll)
         if joints is None:
-            print(f'\r  refused: ({x:.3f}, {y:.3f}, {z:.3f}) is out of reach      ')
+            notice(f'refused: ({x:.3f}, {y:.3f}, {z:.3f}) is out of reach')
         return joints
 
     def move_to(self, x, y, z, duration=MOVE_DURATION):
@@ -132,10 +192,26 @@ class Jogger(Node):
         )
         goal.trajectory.points = [point]
 
-        if not self._send(self.arm, goal):
+        if not self._send(self.arm, goal, timeout=duration + MOVE_GRACE):
             return False
         self.point = [x, y, z]
         return True
+
+    def adjust_gripper(self, which, delta):
+        """Widen or narrow one of the two gripper widths, and show the result.
+
+        The right widths are found the same way the coordinates are - by trying
+        them against the real part - so they are adjustable while jogging
+        rather than fixed for the run.  The jaws move to the width being
+        changed, because the number is not what tells you whether the part is
+        held; the fingers are.
+        """
+        value = getattr(self, f'gripper_{which}') + delta
+        # Rounded so a walk up and back down lands on the value it started at,
+        # rather than a hair off it that the report would then call a change.
+        value = round(min(GRIPPER_MAX, max(GRIPPER_MIN, value)), 3)
+        setattr(self, f'gripper_{which}', value)
+        self.set_gripper(value)
 
     def set_gripper(self, position):
         """Open or close the gripper."""
@@ -144,65 +220,219 @@ class Jogger(Node):
         goal = GripperCommand.Goal()
         goal.command.position = float(position)
         goal.command.max_effort = self.gripper_effort
-        self._send(self.gripper, goal)
+        # The jaws stall against the part on purpose, so a close that never
+        # reports arrival is the normal case rather than a fault; it only has
+        # to be waited out, not diagnosed.
+        self._send(self.gripper, goal, timeout=GRIPPER_TIMEOUT)
 
-    def _send(self, client, goal):
-        """Send a goal and block until it finishes."""
+    def _send(self, client, goal, timeout):
+        """Send a goal and wait for it, giving up rather than waiting forever.
+
+        Every wait here is bounded.  A move that cannot finish - torque off,
+        so the arm never reaches the trajectory it was given - otherwise parks
+        the jogger inside this call, and since the key loop is one level up,
+        the whole tool goes silent: keys do nothing, nothing is printed, and it
+        reads as the keyboard having failed rather than the arm.
+        """
         send = client.send_goal_async(goal)
-        rclpy.spin_until_future_complete(self, send)
+        rclpy.spin_until_future_complete(self, send, timeout_sec=ANSWER_TIMEOUT)
+        if not send.done():
+            notice('the controller did not answer. Is it still running?')
+            return False
+
         handle = send.result()
         if handle is None or not handle.accepted:
-            print('\r  goal rejected by the controller      ')
+            notice('goal rejected by the controller')
             return False
+
         result = handle.get_result_async()
-        rclpy.spin_until_future_complete(self, result)
+        try:
+            rclpy.spin_until_future_complete(self, result, timeout_sec=timeout)
+        except KeyboardInterrupt:
+            # Ctrl-C during a move means stop the arm, not just stop the
+            # program. The trajectory is already with the controller and runs
+            # to its end whatever this process does, so it has to be called
+            # off; quitting without doing so leaves the arm moving after the
+            # operator believes they have stopped it.
+            notice('cancelling the move')
+            self._cancel(handle)
+            raise
+
+        if not result.done():
+            notice(f'the move did not finish within {timeout:.0f} s - cancelling.')
+            notice('The commonest cause is the arm having no torque: check with')
+            notice('  ros2 topic echo <ns>/dynamixel_hardware_interface/dxl_state')
+            self._cancel(handle)
+            return False
         return True
+
+    def _cancel(self, handle):
+        """Call off a goal, without waiting forever for the acknowledgement."""
+        cancel = handle.cancel_goal_async()
+        rclpy.spin_until_future_complete(self, cancel, timeout_sec=ANSWER_TIMEOUT)
 
     def status_line(self):
         x, y, z = self.point
         return (
             f'\r  x {x:+.3f}  y {y:+.3f}  z {z:+.3f}   '
             f'step {self.step * 1000:.0f} mm   '
+            f'grip {gap_mm(self.gripper_open):.0f}/{gap_mm(self.gripper_closed):.0f} mm   '
             f'recorded {len(self.recorded)}      '
         )
 
     def record(self):
-        """Print the current point in the form the layout file uses."""
+        """Save the current point under a name the operator types.
+
+        Written to the file as soon as it is named, rather than kept until the
+        session ends: teaching a set of points takes a while, the arm is being
+        driven by hand throughout, and a session that ends by having the arm
+        switched off should still leave every point taught before that moment.
+        """
         x, y, z = self.point
-        entry = f'{{x: {x:.3f}, y: {y:.3f}, z: {z:.3f}}}'
-        self.recorded.append(entry)
-        print(f'\r  recorded #{len(self.recorded)}: {entry}' + ' ' * 12)
+        suggestion = f'point{len(stock_points.load_points(self.points_file)[0]) + 1}'
+        print()
+        try:
+            name = read_line(f'  name for ({x:+.3f}, {y:+.3f}, {z:+.3f}) '
+                             f'[{suggestion}]: ') or suggestion
+        except KeyboardInterrupt:
+            # Ctrl-C at the prompt means drop this point, not leave the tool -
+            # the arm is parked over the spot and quitting would waste it.
+            notice('not saved')
+            return
+
+        reason = stock_points.check_name(name)
+        if reason is not None:
+            notice(f'not saved: {reason}')
+            return
+
+        point = stock_points.make_point(
+            name, x, y, z, math.degrees(self.pitch), math.degrees(self.roll)
+        )
+        try:
+            outcome = stock_points.save_point(self.points_file, point)
+        except OSError as error:
+            notice(f'could not write {self.points_file}: {error}')
+            return
+
+        if name not in self.recorded:
+            self.recorded.append(name)
+        notice(f'{outcome} {name}: x {x:+.3f}  y {y:+.3f}  z {z:+.3f}')
+
+    def list_points(self):
+        """Show what the file holds, so a name is not reused by accident."""
+        points, problems = stock_points.load_points(self.points_file)
+        print(f'\n\n  {self.points_file}\n')
+        if not points:
+            print('  nothing saved yet\n')
+        for point in points:
+            here = '  <- here' if [point['x'], point['y'], point['z']] == [
+                round(value, 4) for value in self.point
+            ] else ''
+            print(f"  {point['name']:<20} x {point['x']:+.3f}  y {point['y']:+.3f}  "
+                  f"z {point['z']:+.3f}{here}")
+        for problem in problems:
+            print(f'  ! {problem}')
+        print()
 
     def report(self):
-        """Print everything recorded, ready to paste into the layout."""
-        if not self.recorded:
+        """Say where the points went, and print anything not saved for them."""
+        widths_changed = (self.gripper_open, self.gripper_closed) != self.gripper_start
+        if not self.recorded and not widths_changed:
             return
-        print('\n\nRecorded points, in order:\n')
-        for index, entry in enumerate(self.recorded, start=1):
-            print(f'  {index}. {entry}')
-        print(
-            '\nPaste these into config/stock_layout.yaml as warehouse pick_points\n'
-            "or as a bin's place value, then run:\n"
-            '  python3 stock_reach_check.py ../config/stock_layout.yaml\n'
-        )
+
+        if self.recorded:
+            print(f'\n\nSaved to {self.points_file}, this session:\n')
+            for index, name in enumerate(self.recorded, start=1):
+                print(f'  {index}. {name}')
+            print(
+                '\nA point that belongs in the layout - a bin place, the carrier\n'
+                'transfer point, a warehouse pick_point - still has to be copied\n'
+                'into the station layout by hand, then checked with:\n'
+                '  python3 stock_reach_check.py ../config/stock_layout_b.yaml\n'
+            )
+
+        if widths_changed:
+            print('\nGripper widths, as the gripper block of the same file:\n')
+            print('gripper:')
+            print(f'  open_position: {self.gripper_open:.2f}    '
+                  f'# {gap_mm(self.gripper_open):.0f} mm')
+            print(f'  closed_position: {self.gripper_closed:.2f}  '
+                  f'# {gap_mm(self.gripper_closed):.0f} mm')
+            print(f'  max_effort: {self.gripper_effort:.1f}\n')
 
 
-def read_key():
-    """Read one keypress without waiting for Enter.
+# The terminal settings from before single-key mode was entered, kept so a
+# point can be named with echo and backspace working for the moment that takes.
+_LINE_MODE = None
 
-    Falls back to a plain read when stdin is not a terminal, so a canned key
-    sequence can be piped in to rehearse a sequence against mock hardware.
+
+@contextlib.contextmanager
+def keys_without_enter():
+    """Take keys one at a time for the whole session, and keep Ctrl-C working.
+
+    Held rather than taken per keypress.  Each move blocks for a second or
+    more, and a terminal left in line mode for that second echoes whatever is
+    typed into the middle of the status line and then holds it back waiting for
+    Enter, so a key pressed while the arm is still moving is both visible and
+    ignored - which reads as the jogger dropping the key.
+
+    cbreak rather than raw, which differ in exactly one way that matters here:
+    raw mode also stops Ctrl-C becoming a signal.  Holding raw across a move
+    would therefore take away the operator's way of stopping a moving arm,
+    since the loop is inside the action call and not reading keys - the one
+    moment the stop is most likely to be wanted.  cbreak turns off line
+    buffering and echo and leaves the signal alone.
+
+    Does nothing when stdin is not a terminal, so a canned key sequence can
+    still be piped in to rehearse a sequence against mock hardware.
     """
+    global _LINE_MODE
     if not sys.stdin.isatty():
-        return sys.stdin.read(1) or 'q'
+        yield
+        return
 
     handle = sys.stdin.fileno()
     saved = termios.tcgetattr(handle)
+    _LINE_MODE = saved
     try:
-        tty.setraw(handle)
-        return sys.stdin.read(1)
+        tty.setcbreak(handle)
+        yield
     finally:
         termios.tcsetattr(handle, termios.TCSADRAIN, saved)
+        _LINE_MODE = None
+
+
+def read_key():
+    """Read one keypress, assuming keys_without_enter() is holding the terminal."""
+    return sys.stdin.read(1) or 'q'
+
+
+def read_line(prompt):
+    """Ask for a line of text, then hand the terminal back to single keys.
+
+    Naming a point is the one moment the operator types more than a character,
+    and single-key mode makes that unusable: nothing typed is echoed and
+    backspace arrives as a character of the name rather than as a correction.
+    So line mode is put back for the length of the prompt and taken away again
+    afterwards, leaving the rest of the session as it was.
+    """
+    if _LINE_MODE is None:
+        # Either stdin is a pipe rehearsing a sequence, or the terminal was
+        # never taken; input() already behaves in both cases.
+        try:
+            return input(prompt).strip()
+        except EOFError:
+            return ''
+
+    handle = sys.stdin.fileno()
+    single_key = termios.tcgetattr(handle)
+    termios.tcsetattr(handle, termios.TCSADRAIN, _LINE_MODE)
+    try:
+        return input(prompt).strip()
+    except EOFError:
+        return ''
+    finally:
+        termios.tcsetattr(handle, termios.TCSADRAIN, single_key)
 
 
 def parse_args(argv):
@@ -228,6 +458,9 @@ def parse_args(argv):
     parser.add_argument('--gripper-closed', type=float, default=0.15,
                         help='joint value for closed; set narrower than the part')
     parser.add_argument('--gripper-effort', type=float, default=10.0)
+    parser.add_argument('--points-file', default=stock_points.DEFAULT_POINTS_FILE,
+                        help='where p saves points. One file per station: the '
+                             "coordinates are in that arm's own frame")
     # Everything after --ros-args belongs to rclpy, not to us.
     known, _ = parser.parse_known_args(argv)
     return known
@@ -250,6 +483,10 @@ def main():
         return 1
 
     print(__doc__)
+    existing, problems = stock_points.load_points(args.points_file)
+    print(f'Points file: {args.points_file} ({len(existing)} already saved)')
+    for problem in problems:
+        print(f'  ! {problem}')
     print(f'Moving to the start point {node.start} over {FIRST_MOVE_DURATION:.0f} s.')
     print('Keep clear of the arm.\n')
     if not node.move_to(*node.start, duration=FIRST_MOVE_DURATION):
@@ -263,31 +500,51 @@ def main():
         'a': (1, +1), 'd': (1, -1),
         'r': (2, +1), 'f': (2, -1),
     }
+    # Same two physical keys for both widths, shifted for the open one: the
+    # closed width is the one that decides whether the part is held, so it gets
+    # the unshifted pair.
+    widths = {
+        '-': ('closed', -1), '=': ('closed', +1),
+        '_': ('open', -1), '+': ('open', +1),
+    }
 
     try:
-        while True:
-            print(node.status_line(), end='', flush=True)
-            key = read_key().lower()
+        with keys_without_enter():
+            while True:
+                print(node.status_line(), end='', flush=True)
+                key = read_key().lower()
 
-            if key in ('q', '\x03'):
-                break
-            elif key in moves:
-                axis, sign = moves[key]
-                target = list(node.point)
-                target[axis] += sign * node.step
-                node.move_to(*target)
-            elif key == '[':
-                node.step_index = max(0, node.step_index - 1)
-            elif key == ']':
-                node.step_index = min(len(STEP_SIZES) - 1, node.step_index + 1)
-            elif key == 'o':
-                node.set_gripper(node.gripper_open)
-            elif key == 'c':
-                node.set_gripper(node.gripper_closed)
-            elif key == 'p':
-                node.record()
-            elif key == 'h':
-                node.move_to(*node.start, duration=FIRST_MOVE_DURATION)
+                if key in ('q', '\x03'):
+                    break
+                elif key in moves:
+                    axis, sign = moves[key]
+                    target = list(node.point)
+                    target[axis] += sign * node.step
+                    node.move_to(*target)
+                elif key == '[':
+                    node.step_index = max(0, node.step_index - 1)
+                elif key == ']':
+                    node.step_index = min(len(STEP_SIZES) - 1, node.step_index + 1)
+                elif key == 'o':
+                    node.set_gripper(node.gripper_open)
+                elif key == 'c':
+                    node.set_gripper(node.gripper_closed)
+                elif key in widths:
+                    which, sign = widths[key]
+                    node.adjust_gripper(which, sign * GRIPPER_STEP)
+                elif key == 'p':
+                    node.record()
+                elif key == 'l':
+                    node.list_points()
+                elif key == 'h':
+                    node.move_to(*node.start, duration=FIRST_MOVE_DURATION)
+                else:
+                    # Shown rather than ignored: a key that arrives as something
+                    # else - an input method translating letters, a terminal
+                    # sending an escape sequence - looks exactly like a key the
+                    # jogger chose not to act on, and the two need different
+                    # fixes.
+                    notice(f'{key!r} is not a key here; see the list above')
     except KeyboardInterrupt:
         pass
     finally:

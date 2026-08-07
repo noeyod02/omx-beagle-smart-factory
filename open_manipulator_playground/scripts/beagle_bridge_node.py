@@ -45,8 +45,13 @@ import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool, Float32, String
 import yaml
+
+# The most a single nudge may move the carrier. This exists to settle a bay by
+# a few centimetres; a move long enough to cross the cell is a route, where it
+# is written down and can be read back later.
+NUDGE_MAX_M = 0.30
 
 STATE_STARTING = 'starting'
 STATE_IDLE = 'idle'
@@ -67,8 +72,10 @@ class BeagleBridge(Node):
 
         self.declare_parameter('route_file', '')
         self.declare_parameter('dry_run', True)
+        self.declare_parameter('start_station', '')
         self.declare_parameter('scene', 'corridor')
         self.declare_parameter('goto_topic', '/beagle/goto')
+        self.declare_parameter('nudge_topic', '/beagle/nudge')
         self.declare_parameter('estop_topic', '/beagle/estop')
         self.declare_parameter('state_topic', '/beagle/state')
         self.declare_parameter('scan_topic', '/beagle/scan')
@@ -86,7 +93,29 @@ class BeagleBridge(Node):
         self.stations = self.config.get('stations', {})
         if not self.stations:
             raise RuntimeError('route file lists no stations')
-        self.station = self.config.get('home_station') or next(iter(self.stations))
+        # Where the carrier is standing when this node starts.
+        #
+        # Nothing on the robot can answer that - it drives on dead reckoning
+        # with no map - so the bridge has to be told, and until it is it
+        # assumes the home station. That assumption is wrong every time the
+        # bridge is restarted with the carrier parked at the far bay, and it is
+        # wrong in the worst way: the bridge reports ready_for_arm at a station
+        # the carrier is not at, and an arm reaches into empty air for a tray
+        # that is at the other end of the cell.
+        #
+        # So it is a parameter. Set start_station to wherever the carrier
+        # actually is before trusting anything this node says about position.
+        start_station = self.get_parameter('start_station').value
+        if start_station and start_station not in self.stations:
+            raise RuntimeError(
+                f'start_station {start_station!r} is not one of '
+                f'{sorted(self.stations)}'
+            )
+        self.station = (
+            start_station
+            or self.config.get('home_station')
+            or next(iter(self.stations))
+        )
 
         self.dry_run = bool(self.get_parameter('dry_run').value)
         self.state = STATE_STARTING
@@ -109,14 +138,36 @@ class BeagleBridge(Node):
             String, self.get_parameter('goto_topic').value, self._on_goto, 10
         )
         self.create_subscription(
+            Float32, self.get_parameter('nudge_topic').value, self._on_nudge, 10
+        )
+        self.create_subscription(
             Bool, self.get_parameter('estop_topic').value, self._on_estop, 10
         )
 
-        # The robot is created on the worker thread, so a dongle that is not
-        # plugged in fails there and is reported as a state rather than
-        # crashing the node before it can tell anyone why.
+        # Connected here, on the main thread, and handed to the worker that
+        # owns it from then on.
+        #
+        # It used to be built on the worker instead, so that a dongle which is
+        # not plugged in failed there and was reported as a state rather than
+        # crashing the node. That is still what happens - the failure is caught
+        # below - but the connecting itself has to happen here: the roboid
+        # library installs signal handlers as it connects, and only the main
+        # thread may do that. Off the main thread it raises, which is why real
+        # hardware never came up. The handlers are also what stops the wheels
+        # on Ctrl-C, so they are wanted, not merely tolerated.
         self.robot = None
         self.navigator = None
+        self.connect_error = None
+        self.lidar_ready = False
+        try:
+            self.robot = SafeBeagle(
+                dry_run=self.dry_run,
+                scene=self.get_parameter('scene').value,
+                max_speed=float(self.config.get('robot', {}).get('max_speed', 25.0)),
+            )
+        except Exception as exc:  # noqa: BLE001 - report any connection failure
+            self.connect_error = exc
+
         self.worker = threading.Thread(target=self._run_worker, daemon=True)
         self.worker.start()
 
@@ -140,6 +191,37 @@ class BeagleBridge(Node):
             return
         self.commands.put(target)
         self.get_logger().info(f'Queued drive to {target}')
+
+    def _on_nudge(self, msg):
+        """Queue a short move along the current heading, in metres.
+
+        For settling the carrier where a bay actually wants it, which is a
+        thing the routes cannot express: they run bay to bay, and the question
+        here is where 'bay' should be. Positive is forward, negative back.
+
+        Driven rather than pushed by hand on purpose. A carrier shoved into
+        place stands somewhere no route will ever put it again, and the tray
+        coordinate taught against that pose is wrong from the next arrival on.
+        This moves it the same way a route would, so the pose can be reached
+        again - but only once the route is edited to match, which is on
+        whoever nudges it. Until then this position is a one-off.
+        """
+        distance = float(msg.data)
+        if self.estopped:
+            self.get_logger().warn('Estop is latched; clear it before dispatching')
+            return
+        if not math.isfinite(distance) or distance == 0.0:
+            self.get_logger().warn(f'Ignoring nudge of {distance}')
+            return
+        if abs(distance) > NUDGE_MAX_M:
+            self.get_logger().warn(
+                f'Refusing a nudge of {distance:+.3f} m: this is for settling a '
+                f'bay by a few centimetres, and anything over {NUDGE_MAX_M} m '
+                f'belongs in a route where it can be reviewed'
+            )
+            return
+        self.commands.put(('nudge', distance))
+        self.get_logger().info(f'Queued nudge of {distance:+.3f} m')
 
     def _on_estop(self, msg):
         """Latch or clear the emergency stop."""
@@ -165,20 +247,32 @@ class BeagleBridge(Node):
 
     def _run_worker(self):
         """Own the robot: connect, then alternate between routes and telemetry."""
-        try:
-            self.robot = SafeBeagle(
-                dry_run=self.dry_run,
-                scene=self.get_parameter('scene').value,
-                max_speed=float(self.config.get('robot', {}).get('max_speed', 25.0)),
-            )
-            self.robot.start_lidar()
-            self.robot.wait_until_lidar_ready()
-        except Exception as exc:  # noqa: BLE001 - report any connection failure
+        if self.connect_error is not None:
             self.state = STATE_ERROR
-            self.detail = f'could not connect: {exc}'
+            self.detail = f'could not connect: {self.connect_error}'
             self.get_logger().error(self.detail)
             self._telemetry_loop_without_robot()
             return
+
+        # The lidar is spun up here rather than beside the connection: it takes
+        # seconds to come up to speed, and there is no reason to hold the
+        # node's startup for it.
+        #
+        # A lidar that does not come up is not fatal. It is what approach and
+        # square steer by, but a route made only of forward, backward and turn
+        # never reads it, and refusing to start would take away driving that
+        # works. Such a route is refused when it is asked for instead, in
+        # _drive_to, where the steps are known.
+        self.lidar_ready = False
+        try:
+            self.robot.start_lidar()
+            self.robot.wait_until_lidar_ready()
+            self.lidar_ready = True
+        except Exception as exc:  # noqa: BLE001 - a missing lidar is survivable
+            self.get_logger().warn(
+                f'lidar not ready: {exc} Driving still works; docking steps '
+                f'(approach, square, centre) will be refused.'
+            )
 
         settings = self.config.get('robot', {})
         self.navigator = BeagleNavigator(
@@ -199,7 +293,10 @@ class BeagleBridge(Node):
             except queue.Empty:
                 self._publish_telemetry()
                 continue
-            self._drive_to(target)
+            if isinstance(target, tuple):
+                self._nudge(target[1])
+            else:
+                self._drive_to(target)
             self._publish_telemetry()
 
         self.robot.stop()
@@ -209,6 +306,38 @@ class BeagleBridge(Node):
         while not self._shutdown.is_set():
             self._publish_telemetry()
             self._shutdown.wait(float(self.get_parameter('telemetry_period').value))
+
+    def _nudge(self, distance):
+        """Drive a short way along the current heading, staying at this station.
+
+        The station is deliberately left alone. The carrier has not gone
+        anywhere else - it is still in this bay, a few centimetres deeper - so
+        an arm that was allowed to reach into it still is. What has changed is
+        that the route no longer describes where it stopped, and that is said
+        plainly in the log rather than left for the next arrival to reveal.
+        """
+        action = 'forward' if distance > 0.0 else 'backward'
+        step = {'action': action, 'distance_m': abs(distance)}
+
+        self.state = STATE_DRIVING
+        self.detail = f'nudge {distance:+.3f} m'
+        self.get_logger().info(f'Nudging {distance:+.3f} m at {self.station or "?"}')
+        try:
+            self.navigator.run_route([step])
+        except Exception as exc:  # noqa: BLE001 - a nudge must not kill the thread
+            self.robot.stop()
+            self.state = STATE_ERROR
+            self.detail = f'nudge failed: {exc}'
+            self.get_logger().error(self.detail)
+            return
+
+        self.state = STATE_IDLE
+        self.detail = ''
+        self.get_logger().warn(
+            f'Nudged {distance:+.3f} m. The route into {self.station or "this bay"} '
+            f'no longer ends here - edit its distance_m by the same amount, or '
+            f'the next arrival will park where it used to.'
+        )
 
     def _drive_to(self, target):
         """Run the route from the current station to ``target``."""
@@ -222,6 +351,23 @@ class BeagleBridge(Node):
             self.state = STATE_ERROR
             self.detail = f'no route {key}'
             self.get_logger().error(f'{self.detail}; known routes: {sorted(self.routes)}')
+            return
+
+        # Refused rather than attempted: approach and square decide when to
+        # stop from what the lidar sees ahead, and with no lidar they have
+        # nothing to stop on. Driving the route anyway would take the carrier
+        # past the bay rather than into it.
+        needs_lidar = sorted(
+            {step.get('action') for step in steps}
+            & {'approach', 'square', 'centre'}
+        )
+        if needs_lidar and not self.lidar_ready:
+            self.state = STATE_ERROR
+            self.detail = (
+                f'{key} needs the lidar for {", ".join(needs_lidar)}, '
+                f'and it is not ready'
+            )
+            self.get_logger().error(self.detail)
             return
 
         self.state = STATE_DRIVING
@@ -314,7 +460,10 @@ class BeagleBridge(Node):
         if self.worker.is_alive():
             self.worker.join(timeout=3.0)
         if self.robot is not None:
-            self.robot.stop()
+            # close(), not stop(): stopping only halts the wheels, and leaves
+            # the library's own communication threads running, which are not
+            # daemons - the process would sit there after Ctrl-C.
+            self.robot.close()
         super().destroy_node()
 
 

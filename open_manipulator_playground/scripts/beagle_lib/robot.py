@@ -252,6 +252,7 @@ class SafeBeagle:
             except ImportError as exc:
                 raise RuntimeError("roboid를 불러오지 못했습니다. --dry-run으로 먼저 실행하세요.") from exc
             self.robot = Beagle()
+            self._require_connection()
         atexit.register(self.stop)
         for sig in (getattr(signal, "SIGINT", None), getattr(signal, "SIGTERM", None)):
             if sig is not None:
@@ -259,6 +260,41 @@ class SafeBeagle:
                     signal.signal(sig, self._signal_handler)
                 except (ValueError, OSError):
                     pass
+
+    def _require_connection(self, timeout: float = 120.0) -> None:
+        """로봇과 실제로 이어졌는지 확인하고, 아니면 여기서 멈춘다.
+
+        Beagle()은 연결에 실패해도 예외를 던지지 않는다. 연결되지 않은 객체를
+        그대로 돌려주고, 그 객체는 바퀴 명령을 조용히 삼키며 모든 센서를 0으로
+        읽는다. 그래서 연결이 없을 때의 증상이 "잘 도는 로봇"과 구분되지
+        않는다. 주행은 거리를 채우지 못한 채 시간 만료로 끝나고, 그것이
+        "도착"으로 보고된다. 2026-08-05에 이렇게 세 번을 제자리에서 달렸다.
+
+        기다리는 시간이 긴 것은 실수가 아니다. 같은 날 측정에서 동글이 로봇을
+        잡는 데 약 50초가 걸렸다. 그 사이 is_connected()는 계속 False이고
+        Beagle()은 이미 돌아와 있으므로, 성급한 제한은 멀쩡한 로봇을 고장으로
+        보고한다. 잡히면 즉시 빠져나가므로 연결이 빠른 날에는 비용이 없다.
+
+        진행 상황을 찍는 것도 그래서다. 아무 말 없이 1분을 서 있으면 그것은
+        멈춘 노드와 구분되지 않는다.
+        """
+        deadline = time.time() + timeout
+        announced = 0.0
+        started = time.time()
+        while time.time() < deadline:
+            if self.robot.is_connected():
+                return
+            waited = time.time() - started
+            if waited - announced >= 10.0:
+                announced = waited
+                print(f"[비글] 연결을 기다리는 중... {waited:.0f}s", flush=True)
+            time.sleep(0.2)
+        raise RuntimeError(
+            f'{timeout:.0f}초 안에 비글에 연결되지 못했습니다. 동글은 응답하지만 '
+            '로봇과의 링크가 없습니다 - 본체 전원과 배터리, 그리고 이 동글에 '
+            '페어링된 기체인지 확인하세요. 로봇 없이 순서만 확인하려면 '
+            'dry_run:=true.'
+        )
 
     def _signal_handler(self, signum: int, frame: object) -> None:
         self.stop()
@@ -283,21 +319,41 @@ class SafeBeagle:
 
     def close(self) -> None:
         self.stop()
+        # roboid는 자체 스레드로 로봇과 통신하며, 그 스레드는 데몬이 아니다.
+        # stop()은 바퀴만 세울 뿐 스레드를 정리하지 않으므로, dispose()를
+        # 부르지 않으면 Ctrl-C를 눌러도 프로세스가 끝나지 않는다.
+        # (상위 course 패키지에는 없는 호출이다.)
+        if not self.dry_run:
+            try:
+                import roboid  # type: ignore
+
+                roboid.dispose()
+            except Exception:
+                pass
         self._closed = True
 
     def start_lidar(self) -> None:
         self.robot.start_lidar()
 
-    def wait_until_lidar_ready(self) -> None:
-        if hasattr(self.robot, "wait_until_lidar_ready"):
+    def wait_until_lidar_ready(self, timeout: float = 8.0) -> None:
+        """라이다가 회전 속도에 오를 때까지, 단 정해진 시간만 기다린다.
+
+        roboid의 wait_until_lidar_ready()는 시간 제한이 없어서, 라이다가 돌지
+        않으면 영원히 돌아오지 않는다. 호출한 쪽에서는 그것이 노드가 멈춘
+        것과 구분되지 않으므로, is_lidar_ready()를 직접 폴링해서 기다림에
+        끝을 둔다. 상위 course 패키지와 다른 점이다.
+        """
+        ready = getattr(self.robot, "is_lidar_ready", None)
+        if ready is None:
             self.robot.wait_until_lidar_ready()
-        else:
-            deadline = time.monotonic() + 4.0
-            while time.monotonic() < deadline:
-                if getattr(self.robot, "is_lidar_ready", lambda: True)():
-                    return
-                time.sleep(0.05)
-            raise TimeoutError("LiDAR 준비 시간이 초과되었습니다.")
+            return
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if ready():
+                return
+            time.sleep(0.05)
+        raise TimeoutError(f"LiDAR 준비 시간 {timeout:.0f}초가 초과되었습니다.")
 
     def lidar(self) -> list[float]:
         return sanitize_scan(self.robot.lidar())

@@ -37,3 +37,26 @@
   gripper_controller:
     ros__parameters:
       joint: gripper_joint_1
+
+      # A grasp is a stall: the fingers are commanded shut past the part and
+      # stop early on the part itself, so the goal position is never reached.
+      # GripperActionController defaults allow_stalling to false, which aborts
+      # the goal in exactly that case - every successful grasp comes back as
+      # status 6, and a task manager sequencing pick-and-place gives up on a
+      # part it is already holding. True is what lets a grasp report success.
+      #
+      # The cost is that closing on nothing also succeeds, since the fingers
+      # then simply reach the commanded position. Whether a part is actually
+      # held has to be read from the result's position, not from the status.
+      allow_stalling: true
+
+      # A stall is only noticed once the joint reads still for stall_timeout,
+      # and the default threshold of 0.001 rad/s is below what this hardware
+      # can express. A Dynamixel reports velocity in units of 0.229 rev/min,
+      # one of which is 0.0240 rad/s, so a gripper clamped motionless on a
+      # part still flickers between 0 and 0.0240 as the reading quantises.
+      # Every flicker restarts the timer, so with the default the goal can sit
+      # unfinished indefinitely - the arm holds the part and the sequence
+      # never advances. This sits above one such tick and far below the speed
+      # of a gripper that is genuinely still closing.
+      stall_velocity_threshold: 0.03

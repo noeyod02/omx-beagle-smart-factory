@@ -226,6 +226,29 @@ def generate_launch_description():
             default_value='true',
             description='Drive the simulator instead of the real carrier',
         ),
+        # The bridge is the one node in this launch that cannot run beside the
+        # others. roboid, the library that drives the carrier over its dongle,
+        # is installed in the container while the arms run on the host, so a
+        # real carrier means starting the bridge over there by hand and turning
+        # this off - otherwise the copy started here fails at connect and sits
+        # in the graph publishing nothing, which reads exactly like a carrier
+        # that will not answer.
+        DeclareLaunchArgument(
+            'start_beagle',
+            default_value='true',
+            description=(
+                'Whether to start the carrier bridge here. Off when the bridge '
+                'runs in the container, which is what a real carrier needs.'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'start_monitor',
+            default_value='true',
+            description=(
+                'Whether to bring up the bin monitor. Off when the camera is '
+                'not aimed yet and refills are asked for by hand.'
+            ),
+        ),
         DeclareLaunchArgument(
             'auto_relay',
             default_value='false',
@@ -282,6 +305,7 @@ def generate_launch_description():
             'model_path': LaunchConfiguration('model_path'),
             'reference_path': LaunchConfiguration('reference_path'),
         }],
+        condition=IfCondition(LaunchConfiguration('start_monitor')),
     )
 
     beagle = Node(
@@ -293,6 +317,7 @@ def generate_launch_description():
             'route_file': LaunchConfiguration('route_file'),
             'dry_run': LaunchConfiguration('beagle_dry_run'),
         }],
+        condition=IfCondition(LaunchConfiguration('start_beagle')),
     )
 
     relay = Node(
