@@ -34,7 +34,9 @@ Keys:
     w / s    forward / back   (+x / -x)
     a / d    left / right     (+y / -y)
     r / f    up / down        (+z / -z)
-    [ / ]    smaller / bigger step
+    m        switch cartesian <-> joint mode
+    1..5     (joint mode) pick joint1..joint5, then w / s move it
+    [ / ]    smaller / bigger step (mm, or degrees in joint mode)
     o / c    move the jaws to the open / closed width
     - / =    closed width narrower / wider
     _ / +    open width narrower / wider
@@ -69,7 +71,8 @@ import tty
 
 from builtin_interfaces.msg import Duration
 from control_msgs.action import FollowJointTrajectory, GripperCommand
-from omx_kinematics import inverse_kinematics, JOINT_NAMES
+from omx_kinematics import forward_kinematics, inverse_kinematics, JOINT_NAMES
+from stock_joint_jog import JOINT_LIMITS_DEG
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
@@ -78,6 +81,11 @@ from trajectory_msgs.msg import JointTrajectoryPoint
 
 STEP_SIZES = [0.001, 0.002, 0.005, 0.010, 0.020, 0.050]
 DEFAULT_STEP_INDEX = 2
+
+# Joint-mode steps, in degrees. Coarser at the top than the cartesian steps
+# because a joint degree near the base moves the gripper several millimetres.
+JOINT_STEP_SIZES_DEG = [0.5, 1.0, 2.0, 5.0, 10.0]
+DEFAULT_JOINT_STEP_INDEX = 2
 
 # Slow: this is used with hands near the robot.
 MOVE_DURATION = 1.0
@@ -143,6 +151,13 @@ class Jogger(Node):
         self.start = (args.x, args.y, args.z)
         self.point = list(self.start)
         self.step_index = DEFAULT_STEP_INDEX
+        # Joint mode: nudge one joint at a time, no IK in the way. The last
+        # commanded joints are remembered by every move, so switching modes
+        # continues from wherever the arm is.
+        self.mode = 'cartesian'
+        self.joints = None
+        self.joint_index = 0
+        self.joint_step_index = DEFAULT_JOINT_STEP_INDEX
         self.points_file = args.points_file
         # Names saved this session, in order, for the report at the end.  The
         # file itself holds everything ever saved, this session or not.
@@ -177,12 +192,8 @@ class Jogger(Node):
             notice(f'refused: ({x:.3f}, {y:.3f}, {z:.3f}) is out of reach')
         return joints
 
-    def move_to(self, x, y, z, duration=MOVE_DURATION):
-        """Send the arm to a point and wait for it to arrive."""
-        joints = self.solve(x, y, z)
-        if joints is None:
-            return False
-
+    def _send_joints(self, joints, duration):
+        """Send one joint target and wait for it."""
         goal = FollowJointTrajectory.Goal()
         goal.trajectory.joint_names = list(JOINT_NAMES)
         point = JointTrajectoryPoint()
@@ -191,10 +202,42 @@ class Jogger(Node):
             sec=int(duration), nanosec=int((duration - int(duration)) * 1e9)
         )
         goal.trajectory.points = [point]
+        return self._send(self.arm, goal, timeout=duration + MOVE_GRACE)
 
-        if not self._send(self.arm, goal, timeout=duration + MOVE_GRACE):
+    def move_to(self, x, y, z, duration=MOVE_DURATION):
+        """Send the arm to a point and wait for it to arrive."""
+        joints = self.solve(x, y, z)
+        if joints is None:
+            return False
+        if not self._send_joints(joints, duration):
             return False
         self.point = [x, y, z]
+        self.joints = list(joints)
+        return True
+
+    def nudge_joint(self, delta_deg, duration=MOVE_DURATION):
+        """Move the selected joint alone, then read the pose back through FK.
+
+        The pitch follows the joints here rather than the other way round, so
+        after a joint move the recorded pitch is whatever the arm is actually
+        doing - a point saved in joint mode carries the approach angle it was
+        posed at, not the one the session started with.
+        """
+        name = JOINT_NAMES[self.joint_index]
+        target = list(self.joints)
+        target[self.joint_index] += math.radians(delta_deg)
+
+        low, high = JOINT_LIMITS_DEG[name]
+        value_deg = math.degrees(target[self.joint_index])
+        if not low <= value_deg <= high:
+            notice(f'refused: {name} at {value_deg:.1f} deg outside [{low}, {high}]')
+            return False
+
+        if not self._send_joints(target, duration):
+            return False
+        self.joints = target
+        self.point = list(forward_kinematics(target)[:3])
+        self.pitch = -(target[1] + target[2] + target[3])
         return True
 
     def adjust_gripper(self, which, delta):
@@ -273,6 +316,18 @@ class Jogger(Node):
 
     def status_line(self):
         x, y, z = self.point
+        if self.mode == 'joint':
+            angles = ' '.join(
+                f'{"*" if i == self.joint_index else " "}{name[-1]}:'
+                f'{math.degrees(v):6.1f}'
+                for i, (name, v) in enumerate(zip(JOINT_NAMES, self.joints))
+            )
+            return (
+                f'\r  [joint]{angles}  '
+                f'({x:+.3f}, {y:+.3f}, {z:+.3f})  '
+                f'pitch {math.degrees(self.pitch):5.1f}   '
+                f'step {JOINT_STEP_SIZES_DEG[self.joint_step_index]} deg      '
+            )
         return (
             f'\r  x {x:+.3f}  y {y:+.3f}  z {z:+.3f}   '
             f'step {self.step * 1000:.0f} mm   '
@@ -516,15 +571,35 @@ def main():
 
                 if key in ('q', '\x03'):
                     break
+                elif key == 'm':
+                    node.mode = 'joint' if node.mode == 'cartesian' else 'cartesian'
+                    notice(f'{node.mode} mode')
+                elif node.mode == 'joint' and key in '12345':
+                    node.joint_index = int(key) - 1
+                elif node.mode == 'joint' and key in ('w', 's'):
+                    sign = +1 if key == 'w' else -1
+                    node.nudge_joint(
+                        sign * JOINT_STEP_SIZES_DEG[node.joint_step_index]
+                    )
+                elif node.mode == 'joint' and key in moves:
+                    notice('joint mode: w/s move the joint picked with 1..5; m returns')
                 elif key in moves:
                     axis, sign = moves[key]
                     target = list(node.point)
                     target[axis] += sign * node.step
                     node.move_to(*target)
                 elif key == '[':
-                    node.step_index = max(0, node.step_index - 1)
+                    if node.mode == 'joint':
+                        node.joint_step_index = max(0, node.joint_step_index - 1)
+                    else:
+                        node.step_index = max(0, node.step_index - 1)
                 elif key == ']':
-                    node.step_index = min(len(STEP_SIZES) - 1, node.step_index + 1)
+                    if node.mode == 'joint':
+                        node.joint_step_index = min(
+                            len(JOINT_STEP_SIZES_DEG) - 1, node.joint_step_index + 1
+                        )
+                    else:
+                        node.step_index = min(len(STEP_SIZES) - 1, node.step_index + 1)
                 elif key == 'o':
                     node.set_gripper(node.gripper_open)
                 elif key == 'c':
