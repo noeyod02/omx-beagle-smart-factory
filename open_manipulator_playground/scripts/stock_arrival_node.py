@@ -223,8 +223,11 @@ class StockArrival(Node):
             # While the arm is working it reaches over the bay and hides the
             # carrier from the camera. Whatever the model sees during that
             # is the arm, not an arrival or a departure - hold the counters
-            # until the arm is out of the way.
-            if self.transfer_pub is not None and self.arm_state not in (None, 'idle'):
+            # until the arm is out of the way. Only 'busy' means the arm is
+            # actually moving; blocked or cooldown is an arm parked at home,
+            # in full view of nothing, and freezing on those left the watch
+            # blind after a refused job (2026-08-07).
+            if self.transfer_pub is not None and self.arm_state == 'busy':
                 hit = miss = 0
             elif detected:
                 hit, miss = hit + 1, 0
