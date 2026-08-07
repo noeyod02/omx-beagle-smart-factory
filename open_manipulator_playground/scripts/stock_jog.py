@@ -326,7 +326,9 @@ class Jogger(Node):
                 f'\r  [joint]{angles}  '
                 f'({x:+.3f}, {y:+.3f}, {z:+.3f})  '
                 f'pitch {math.degrees(self.pitch):5.1f}   '
-                f'step {JOINT_STEP_SIZES_DEG[self.joint_step_index]} deg      '
+                f'step {JOINT_STEP_SIZES_DEG[self.joint_step_index]} deg   '
+                f'grip {gap_mm(self.gripper_open):.0f}/'
+                f'{gap_mm(self.gripper_closed):.0f} mm      '
             )
         return (
             f'\r  x {x:+.3f}  y {y:+.3f}  z {z:+.3f}   '
