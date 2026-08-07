@@ -250,6 +250,28 @@ def generate_launch_description():
             ),
         ),
         DeclareLaunchArgument(
+            'start_arrival',
+            default_value='false',
+            description=(
+                'Watch the station A bay with the carrier-trained YOLO and '
+                'start the warehouse arm when the carrier is SEEN to arrive, '
+                'not merely reported. Needs its own camera on the bay and '
+                'ultralytics on the host.'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'arrival_model_path',
+            default_value=PathJoinSubstitution([
+                package, 'config', 'models', 'beagle_item_640.pt',
+            ]),
+            description='YOLO weights that know the carrier (class "beagle")',
+        ),
+        DeclareLaunchArgument(
+            'arrival_video_device',
+            default_value='0',
+            description='OpenCV index of the camera watching the station A bay',
+        ),
+        DeclareLaunchArgument(
             'auto_relay',
             default_value='false',
             description=(
@@ -331,6 +353,21 @@ def generate_launch_description():
         }],
     )
 
+    # Sees the carrier arrive at station A's bay and starts the warehouse
+    # arm. Off by default: it needs a camera aimed at the bay and the
+    # carrier-trained weights, neither of which this launch can conjure.
+    arrival = Node(
+        package='open_manipulator_playground',
+        executable='stock_arrival_node.py',
+        name='stock_arrival',
+        output='screen',
+        parameters=[{
+            'model_path': LaunchConfiguration('arrival_model_path'),
+            'video_device': LaunchConfiguration('arrival_video_device'),
+        }],
+        condition=IfCondition(LaunchConfiguration('start_arrival')),
+    )
+
     # Turns a stable empty reading straight into a relay. Off by default: this
     # is the point the approval gate belongs at, and until there is one a
     # person asking for the refill is the gate.
@@ -345,5 +382,6 @@ def generate_launch_description():
 
     return LaunchDescription(
         declared_arguments
-        + [station_a, station_b, camera, monitor, beagle, relay, auto_starter]
+        + [station_a, station_b, camera, monitor, beagle, relay, arrival,
+           auto_starter]
     )

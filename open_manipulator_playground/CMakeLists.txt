@@ -87,6 +87,8 @@ install(PROGRAMS
   scripts/beagle_navigation.py
   scripts/beagle_bridge_node.py
   scripts/beagle_encoder_scale.py
+  scripts/stock_approval_node.py
+  scripts/stock_arrival_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
