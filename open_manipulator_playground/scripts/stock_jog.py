@@ -218,10 +218,11 @@ class Jogger(Node):
     def nudge_joint(self, delta_deg, duration=MOVE_DURATION):
         """Move the selected joint alone, then read the pose back through FK.
 
-        The pitch follows the joints here rather than the other way round, so
-        after a joint move the recorded pitch is whatever the arm is actually
-        doing - a point saved in joint mode carries the approach angle it was
-        posed at, not the one the session started with.
+        The pitch and roll follow the joints here rather than the other way
+        round, so after a joint move the recorded angles are whatever the arm
+        is actually doing - a point saved in joint mode carries the approach
+        angle and wrist roll it was posed at, not the ones the session started
+        with.
         """
         name = JOINT_NAMES[self.joint_index]
         target = list(self.joints)
@@ -238,6 +239,7 @@ class Jogger(Node):
         self.joints = target
         self.point = list(forward_kinematics(target)[:3])
         self.pitch = -(target[1] + target[2] + target[3])
+        self.roll = target[4]
         return True
 
     def adjust_gripper(self, which, delta):
