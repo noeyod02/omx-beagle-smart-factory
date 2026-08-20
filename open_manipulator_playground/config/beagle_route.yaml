@@ -104,12 +104,14 @@ routes:
   # leaves, since it describes where the tray stops rather than where the bay
   # is. The return leg matches this figure so a round trip comes back to the
   # same place; if one is changed the other has to be.
-  # Reshaped 2026-08-20: bay B moved, so the leg is now an L. 1.2 m is the
-  # old 0.67 stretched 1.8x per the new floor plan; the left turn points the
-  # carrier down bay B's aisle; 0.48 m is the asked-for "2 seconds" converted
-  # at the measured cruise rate (1210 mm / 5 s = 242 mm/s at 18%), because a
-  # distance keeps the gyro heading hold and the encoder check that a timed
-  # drive would lose.
+  # Reshaped 2026-08-20: bay B moved, so the leg is now an L. The straight
+  # started as the old 0.67 stretched 1.8x (1.2 m), then was walked out a
+  # further "1.5 seconds" (0.36 m) against the real floor, to 1.56 m. The
+  # left turn points the carrier down bay B's aisle; 0.48 m is the
+  # asked-for "2 seconds". Seconds are converted at the measured cruise
+  # rate (1210 mm / 5 s = 242 mm/s at 18%) and written as distances,
+  # because a distance keeps the gyro heading hold and the encoder check
+  # that a timed drive would lose.
   #
   # The turn means the tray ARRIVES ROTATED +90 relative to the old bay - all
   # of station B's carrier/cell points must be taught against what this route
@@ -117,7 +119,7 @@ routes:
   # step for step so the tray comes home unrotated and station A's taught
   # carrier point stays valid.
   station_a->station_b:
-    - {action: forward, distance_m: 1.2}
+    - {action: forward, distance_m: 1.56}
     - {action: turn, degrees: 90}
     - {action: forward, distance_m: 0.48}
 
@@ -147,4 +149,4 @@ routes:
   station_b->station_a:
     - {action: backward, distance_m: 0.48}
     - {action: turn, degrees: -90}
-    - {action: backward, distance_m: 1.2}
+    - {action: backward, distance_m: 1.56}
