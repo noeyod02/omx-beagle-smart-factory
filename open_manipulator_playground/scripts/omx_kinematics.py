@@ -115,6 +115,10 @@ def inverse_kinematics(x, y, z, pitch=-math.pi / 2.0, roll=0.0, elbow_up=True):
     j1 = offset - phase
     if dx * math.cos(j1) + y * math.sin(j1) < 0.0:
         j1 = -offset - phase
+    # offset - phase can land a turn outside [-pi, pi) for targets behind the
+    # base, and a controller told to go to +259 deg swings the long way round
+    # rather than to the equivalent -101 deg.
+    j1 = wrap_to_pi(j1)
 
     # Target expressed in the arm plane, with the joint5 roll contribution removed.
     radial = dx * math.cos(j1) + y * math.sin(j1)
