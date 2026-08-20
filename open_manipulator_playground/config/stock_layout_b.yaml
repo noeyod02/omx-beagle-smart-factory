@@ -30,7 +30,7 @@ workspace:
   # away from the cells before coming back. At -54 the arm now leaves the
   # tray already heading toward the cells.
   # Run scripts/stock_reach_check.py after editing any coordinate here.
-  transit: {x: 0.11, y: -0.165, z: 0.18}
+  transit: {x: 0.11, y: -0.165, z: 0.205}
   # Height the gripper hovers above a target before descending onto it.
   #
   # 0.03. This was squeezed to 0.008 while the tray sat at radial 0.215,
@@ -62,7 +62,7 @@ workspace:
   limits:
     x: [-0.06, 0.28]
     y: [-0.20, 0.20]
-    z: [0.02, 0.22]
+    z: [0.02, 0.24]
 
   # Seconds allowed for each kind of motion. Slower is safer for a first run.
   durations:
@@ -178,5 +178,5 @@ bins:
     # 0.07 the carry brushed the parts standing there. 0.172 total keeps
     # the pass nearly level with the 0.18 transit; straight-down IK at this
     # spot still solves (bin_a's own ceiling is 0.07, this spot's is 0.11+).
-    place: {x: -0.0364, y: -0.1702, z: 0.0622, pitch_deg: -90.0, roll_deg: 0.0, hover: 0.11}
+    place: {x: -0.0364, y: -0.1702, z: 0.0622, pitch_deg: -90.0, roll_deg: 0.0, hover: 0.10}
     roi: [0, 0, 0, 0]
