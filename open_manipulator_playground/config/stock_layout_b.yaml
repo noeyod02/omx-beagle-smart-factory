@@ -174,5 +174,9 @@ bins:
   # Taught 2026-08-20 as 'binb', straight down with no roll, around the
   # side of the base at j1 -98 - hence the widened x limit above.
   - id: bin_b
-    place: {x: -0.0364, y: -0.1702, z: 0.0622, pitch_deg: -90.0, roll_deg: 0.0, hover: 0.07}
+    # hover 0.11: the sweep to this cell passes right over cell a, and at
+    # 0.07 the carry brushed the parts standing there. 0.172 total keeps
+    # the pass nearly level with the 0.18 transit; straight-down IK at this
+    # spot still solves (bin_a's own ceiling is 0.07, this spot's is 0.11+).
+    place: {x: -0.0364, y: -0.1702, z: 0.0622, pitch_deg: -90.0, roll_deg: 0.0, hover: 0.11}
     roi: [0, 0, 0, 0]
