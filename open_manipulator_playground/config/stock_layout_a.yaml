@@ -50,7 +50,7 @@ workspace:
 
   # Hard limits; every waypoint is checked against these at startup.
   limits:
-    x: [0.05, 0.28]
+    x: [0.03, 0.28]   # carrier sits at x=0.043 since 2026-08-20
     y: [-0.20, 0.20]
     z: [0.02, 0.22]
 
@@ -102,7 +102,11 @@ carrier:
   # Valid only for that parked pose: the return leg has no docking step, so
   # nudging the carrier after this was taken puts the tray somewhere this does
   # not describe.
-  transfer: {x: 0.054, y: -0.175, z: 0.155}
+  # Re-taught 2026-08-20 as 'carriera' against where the L route's return
+  # leg actually parks the carrier: tilted to -105 with the jaws rolled 20,
+  # so the part is pressed down onto the tray rather than dropped. hover is
+  # 0.025, this pose's IK ceiling (the default 0.03 has no solution here).
+  transfer: {x: 0.0426, y: -0.1489, z: 0.1617, pitch_deg: -105.0, roll_deg: 20.0, hover: 0.025}
 
 # Where replenishment parts are stored. They are consumed in order; once the
 # list is exhausted the node reports that the warehouse is empty.
@@ -118,8 +122,11 @@ warehouse:
   # camera-supplied points once scripts/stock_hand_eye.py has mapped pixels
   # to this frame.
   pick_points:
-    - {x: 0.214, y: 0.000, z: 0.090}
-    - {x: 0.214, y: 0.000, z: 0.090}
+    # Re-taught 2026-08-20 as 'warehouse', at -85 rather than straight
+    # down. Same spot twice: the list is a consumption budget, one entry
+    # per run per launch, restocked by hand between runs.
+    - {x: 0.2252, y: 0.0002, z: 0.0964, pitch_deg: -85.0, roll_deg: 0.0}
+    - {x: 0.2252, y: 0.0002, z: 0.0964, pitch_deg: -85.0, roll_deg: 0.0}
 
 # Station A has no stock bins of its own.
 bins: []
