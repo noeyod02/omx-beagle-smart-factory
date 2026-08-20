@@ -56,8 +56,11 @@ workspace:
   home: {x: 0.124, y: 0.0, z: 0.15}
 
   # Hard limits; every waypoint is checked against these at startup.
+  # x reaches below zero since 2026-08-20: cell b was taught at x=-0.036,
+  # around the side of the base (j1 at -98). The j1 wrap fix in
+  # omx_kinematics is what makes such points replay sanely.
   limits:
-    x: [0.05, 0.28]
+    x: [-0.06, 0.28]
     y: [-0.20, 0.20]
     z: [0.02, 0.22]
 
@@ -167,11 +170,9 @@ bins:
     place: {x: 0.066, y: -0.188, z: 0.088, pitch_deg: -90.0, roll_deg: 20.0}
     roi: [80, 90, 200, 210]
   # Station B owns cells a and b only; cells c and d belong to station C's
-  # arm (stock_layout_c.yaml, on PC2). Cell b has no taught coordinate yet -
-  # the old drop2/drop3 points are one spot saved twice and drop5 is a folded
-  # pose at the base, so none of them can stand in. Teach it as above, then
-  # fill this in and delete this comment:
-  #
-  # - id: bin_b
-  #   place: {x: 0.0, y: 0.0, z: 0.0, pitch_deg: -60.0, roll_deg: 0.0}
-  #   roi: [0, 0, 0, 0]
+  # arm (stock_layout_c.yaml, on PC2).
+  # Taught 2026-08-20 as 'binb', straight down with no roll, around the
+  # side of the base at j1 -98 - hence the widened x limit above.
+  - id: bin_b
+    place: {x: -0.0364, y: -0.1702, z: 0.0622, pitch_deg: -90.0, roll_deg: 0.0}
+    roi: [0, 0, 0, 0]
