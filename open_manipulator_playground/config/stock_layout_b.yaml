@@ -22,14 +22,15 @@
 
 workspace:
   # Single via point the arm passes through between picking and placing.
-  # Taught 2026-08-06 as 'middle', deliberately high (z=0.178): the carry from
-  # the tray to the box passes over the Beagle's wheel, and at the old low
-  # transit the part clipped it. This point lifts the part as high as the arm
-  # can hold it at this radius before it swings across. Only reachable at all
-  # because the arm base was moved 2-3 cm toward the bay the same day - at the
-  # old base position z=0.178 this far out had no IK solution.
+  # Kept deliberately high (z=0.18): the carry from the tray to the cells
+  # passes over the Beagle, and a low transit once clipped a part on its
+  # wheel. Moved 2026-08-20 onto the direct arc between the new carrier
+  # (azimuth -37) and the cells (bin_a at -67): the old point sat at -19,
+  # on the far side of the carrier, so every carry swung counter-clockwise
+  # away from the cells before coming back. At -54 the arm now leaves the
+  # tray already heading toward the cells.
   # Run scripts/stock_reach_check.py after editing any coordinate here.
-  transit: {x: 0.176, y: -0.040, z: 0.178}
+  transit: {x: 0.11, y: -0.165, z: 0.18}
   # Height the gripper hovers above a target before descending onto it.
   #
   # 0.03. This was squeezed to 0.008 while the tray sat at radial 0.215,
