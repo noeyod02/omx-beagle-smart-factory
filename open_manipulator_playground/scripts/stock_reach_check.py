@@ -94,9 +94,10 @@ def collect_points(layout, default_pitch, default_roll):
         )
         resolved.append((name, point['x'], point['y'], point['z'], pitch, roll))
         if has_hover:
+            hover = float(point.get('hover', hover_height))
             resolved.append((
                 f'{name}.hover',
-                point['x'], point['y'], point['z'] + hover_height,
+                point['x'], point['y'], point['z'] + hover,
                 pitch, roll,
             ))
     return resolved

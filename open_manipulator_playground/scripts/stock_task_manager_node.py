@@ -275,9 +275,13 @@ class StockTaskManager(Node):
         Both are resolved now rather than when a job starts, so an unreachable
         layout is caught at startup instead of stranding the arm mid-motion.
         The hover shares the point's angles: the descent is a straight drop
-        along the approach the point was taught with.
+        along the approach the point was taught with.  A point may carry its
+        own ``hover`` height - a cell holding parts needs the carry to clear
+        what is already standing in it, while the carrier's hover has to stay
+        low because reach up there is scarce.
         """
         pitch, roll = self._angles(point)
+        hover = float(point.get('hover', self.hover_height))
         target = self._solve(
             name, point['x'], point['y'], point['z'], 'descend', pitch, roll
         )
@@ -285,7 +289,7 @@ class StockTaskManager(Node):
             f'{name}.hover',
             point['x'],
             point['y'],
-            point['z'] + self.hover_height,
+            point['z'] + hover,
             'approach',
             pitch,
             roll,
