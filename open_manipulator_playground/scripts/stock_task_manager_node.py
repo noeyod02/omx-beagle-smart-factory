@@ -449,6 +449,10 @@ class StockTaskManager(Node):
             ('arm', place),
             ('gripper', self.gripper_open),
             ('arm', place.hover),
+            # Through the transit on the way home too: a hover is only as
+            # high as its pose's IK allows, and swinging straight home from
+            # a low one clipped the part just placed (station A, 2026-08-20).
+            ('arm', self.transit),
             ('arm', self.home),
         ]
 

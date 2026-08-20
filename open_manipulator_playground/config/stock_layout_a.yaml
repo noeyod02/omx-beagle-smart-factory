@@ -26,7 +26,12 @@ workspace:
   # puts the wrist 0.12 m above the target, so the arm's reach shrinks sharply
   # with height. At z=0.15 it only reaches 0.22 m from the base, at z=0.20 just
   # 0.17 m. Run scripts/stock_reach_check.py after editing any coordinate here.
-  transit: {x: 0.15, y: 0.0, z: 0.15}
+  # Raised and swung toward the bay 2026-08-20: it now sits mid-arc
+  # between the warehouse (azimuth 0) and the tray (azimuth -70) at the
+  # -90 IK ceiling, so both the carry out and the retreat home pass high
+  # over whatever is standing on the tray. The retreat matters because
+  # the tray pose's own hover ceiling is only 25 mm - see carrier below.
+  transit: {x: 0.12, y: -0.09, z: 0.20}
   # Height the gripper hovers above a target before descending onto it.
   # Cut from 0.06 to fit the taught points rather than because 0.03 is enough
   # lift. Both leave less headroom than 0.06 wants: the pick can rise 56 mm
