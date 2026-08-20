@@ -111,7 +111,11 @@ carrier:
   # leg actually parks the carrier: tilted to -105 with the jaws rolled 20,
   # so the part is pressed down onto the tray rather than dropped. hover is
   # 0.025, this pose's IK ceiling (the default 0.03 has no solution here).
-  transfer: {x: 0.0426, y: -0.1489, z: 0.1617, pitch_deg: -105.0, roll_deg: 20.0, hover: 0.025}
+  # retreat: once the part is down, pull straight up to 0.21 with the
+  # wrist back at -90 - the -105 approach pose itself caps 25 mm up, and
+  # leaving at that height brushed the part just placed.
+  transfer: {x: 0.0426, y: -0.1489, z: 0.1617, pitch_deg: -105.0, roll_deg: 20.0, hover: 0.025,
+             retreat: {z: 0.205, pitch_deg: -90.0}}
 
 # Where replenishment parts are stored. They are consumed in order; once the
 # list is exhausted the node reports that the warehouse is empty.

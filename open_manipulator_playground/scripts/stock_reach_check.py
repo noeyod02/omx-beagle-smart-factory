@@ -100,6 +100,22 @@ def collect_points(layout, default_pitch, default_roll):
                 point['x'], point['y'], point['z'] + hover,
                 pitch, roll,
             ))
+        retreat = point.get('retreat')
+        if retreat is not None:
+            merged = {**point, **retreat}
+            r_pitch = (
+                math.radians(float(merged['pitch_deg']))
+                if 'pitch_deg' in merged else default_pitch
+            )
+            r_roll = (
+                math.radians(float(merged['roll_deg']))
+                if 'roll_deg' in merged else default_roll
+            )
+            resolved.append((
+                f'{name}.retreat',
+                point['x'], point['y'], float(retreat['z']),
+                r_pitch, r_roll,
+            ))
     return resolved
 
 

@@ -91,6 +91,9 @@ class Waypoint:
         self.duration = duration
         # Set for grasp points: the waypoint directly above this one.
         self.hover = None
+        # Optional higher pull-away above a place, used after the release
+        # instead of the hover - see _solve_target.
+        self.retreat = None
 
     def __repr__(self):
         return f'{self.name}({self.x:.3f}, {self.y:.3f}, {self.z:.3f})'
@@ -294,6 +297,22 @@ class StockTaskManager(Node):
             pitch,
             roll,
         )
+        # An approach pose tilted past vertical caps its hover low (station
+        # A's tray pose has 25 mm of headroom). A 'retreat' pulls away higher
+        # at its own angles - typically back at -90 - once the part is down
+        # and the pose no longer has to match the taught approach.
+        retreat = point.get('retreat')
+        if retreat is not None:
+            r_pitch, r_roll = self._angles({**point, **retreat})
+            target.retreat = self._solve(
+                f'{name}.retreat',
+                point['x'],
+                point['y'],
+                float(retreat['z']),
+                'approach',
+                r_pitch,
+                r_roll,
+            )
         return target
 
     def _report_layout(self):
@@ -448,7 +467,7 @@ class StockTaskManager(Node):
             ('arm', place.hover),
             ('arm', place),
             ('gripper', self.gripper_open),
-            ('arm', place.hover),
+            ('arm', place.retreat or place.hover),
             # Through the transit on the way home too: a hover is only as
             # high as its pose's IK allows, and swinging straight home from
             # a low one clipped the part just placed (station A, 2026-08-20).
