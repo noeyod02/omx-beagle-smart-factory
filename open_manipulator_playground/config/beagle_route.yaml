@@ -104,8 +104,22 @@ routes:
   # leaves, since it describes where the tray stops rather than where the bay
   # is. The return leg matches this figure so a round trip comes back to the
   # same place; if one is changed the other has to be.
+  # Reshaped 2026-08-20: bay B moved, so the leg is now an L. 1.2 m is the
+  # old 0.67 stretched 1.8x per the new floor plan; the left turn points the
+  # carrier down bay B's aisle; 0.48 m is the asked-for "2 seconds" converted
+  # at the measured cruise rate (1210 mm / 5 s = 242 mm/s at 18%), because a
+  # distance keeps the gyro heading hold and the encoder check that a timed
+  # drive would lose.
+  #
+  # The turn means the tray ARRIVES ROTATED +90 relative to the old bay - all
+  # of station B's carrier/cell points must be taught against what this route
+  # actually produces, not carried over. The return leg mirrors this one
+  # step for step so the tray comes home unrotated and station A's taught
+  # carrier point stays valid.
   station_a->station_b:
-    - {action: forward, distance_m: 0.67}
+    - {action: forward, distance_m: 1.2}
+    - {action: turn, degrees: 90}
+    - {action: forward, distance_m: 0.48}
 
   # UNSOLVED, and deliberately left without a docking step rather than given
   # one that does nothing. approach and square both read the lidar ahead of the
@@ -127,5 +141,10 @@ routes:
   # on 2026-08-06 at the old 0.45: the carrier covered -0.464 m with -0.3 deg
   # of heading drift, a good deal straighter than the -2.9, +3.6 and -5.4 deg
   # this leg had been running the day before.
+  # Exact mirror of the outbound L, run in reverse order: back out of bay B's
+  # aisle, undo the left turn, back down the long straight. No 180s, so the
+  # tray points the same way at A as it always has.
   station_b->station_a:
-    - {action: backward, distance_m: 0.67}
+    - {action: backward, distance_m: 0.48}
+    - {action: turn, degrees: -90}
+    - {action: backward, distance_m: 1.2}
