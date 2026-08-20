@@ -99,8 +99,12 @@ workspace:
 # should sit near 0.34 and not move. A reading that reaches the commanded 0.32
 # means the jaws closed on nothing, or on nothing any more.
 gripper:
+  # Re-sized in the jog against the real part on 2026-08-20 (session block
+  # pasted verbatim). Watch the first grasps: if the carry width slides all
+  # the way down to 34 mm the jaws closed on nothing - or squeezed the part
+  # out - and this is the number to revisit.
   open_position: 0.76    # 86 mm
-  closed_position: 0.32  # 42 mm
+  closed_position: 0.24  # 34 mm
   max_effort: 10.0
 
 # Where the part is lifted off the Beagle's tray, in THIS arm's frame.
@@ -121,7 +125,10 @@ gripper:
 # The relay refuses to reach for the tray unless the Beagle reports
 # ready_for_arm, so a carrier parked short of the bay is never grasped into.
 carrier:
-  transfer: {x: 0.194, y: 0.000, z: 0.140}
+  # Re-taught 2026-08-20 as 'carrierb' against the new L route, which parks
+  # the tray rotated +90 from the old bay - hence the wrist roll. Valid only
+  # for the pose that route actually produces.
+  transfer: {x: 0.1835, y: -0.1489, z: 0.1594, pitch_deg: -60.0, roll_deg: 50.0}
 
 # Station B fetches from the carrier, never from a warehouse.
 warehouse:
@@ -150,17 +157,20 @@ bins:
   #
   # The rois are still placeholders: the camera at this station has not been
   # aimed or calibrated, so nothing reads them yet.
+  # Re-taught 2026-08-20 for the four-cell arrangement (B owns a and b),
+  # posed in joint mode at straight-down pitch with the jaws rolled 20 to
+  # line up with the cell. Taken from the jog's readout - the 'bin a' save
+  # was refused over the space in the name, but the pose on screen was the
+  # taught one and IK reproduces its joints to 0.1 deg.
   - id: bin_a
-    place: {x: 0.056, y: -0.180, z: 0.073}
+    place: {x: 0.066, y: -0.188, z: 0.088, pitch_deg: -90.0, roll_deg: 20.0}
     roi: [80, 90, 200, 210]
-  # Cells b and c have no taught coordinates yet - the drop2/drop3 points in
-  # ~/.ros/stock_points_b.yaml are the same physical spot saved twice, and
-  # drop5 is a folded pose at the base, so none of them describe these cells.
-  # Teach them as above, then fill these in and delete this comment:
+  # Station B owns cells a and b only; cells c and d belong to station C's
+  # arm (stock_layout_c.yaml, on PC2). Cell b has no taught coordinate yet -
+  # the old drop2/drop3 points are one spot saved twice and drop5 is a folded
+  # pose at the base, so none of them can stand in. Teach it as above, then
+  # fill this in and delete this comment:
   #
   # - id: bin_b
-  #   place: {x: 0.0, y: 0.0, z: 0.0, pitch_deg: -60.0, roll_deg: 0.0}
-  #   roi: [0, 0, 0, 0]
-  # - id: bin_c
   #   place: {x: 0.0, y: 0.0, z: 0.0, pitch_deg: -60.0, roll_deg: 0.0}
   #   roi: [0, 0, 0, 0]
