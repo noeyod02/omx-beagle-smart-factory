@@ -53,8 +53,14 @@ def max_radial(z, pitch, roll):
     return low
 
 
-def collect_points(layout):
-    """Flatten a layout into named points, including the hover above each grasp."""
+def collect_points(layout, default_pitch, default_roll):
+    """Flatten a layout into named points, including the hover above each grasp.
+
+    Each point is checked at the angles it carries - a point taught in the
+    jog's joint mode records its own pitch_deg/roll_deg, and that is the pose
+    the task manager will replay it at - falling back to the workspace
+    defaults when it carries none.
+    """
     workspace = layout['workspace']
     hover_height = float(workspace['hover_height'])
 
@@ -78,11 +84,21 @@ def collect_points(layout):
 
     resolved = []
     for name, point, has_hover in points:
-        resolved.append((name, point['x'], point['y'], point['z']))
+        pitch = (
+            math.radians(float(point['pitch_deg']))
+            if 'pitch_deg' in point else default_pitch
+        )
+        roll = (
+            math.radians(float(point['roll_deg']))
+            if 'roll_deg' in point else default_roll
+        )
+        resolved.append((name, point['x'], point['y'], point['z'], pitch, roll))
         if has_hover:
-            resolved.append(
-                (f'{name}.hover', point['x'], point['y'], point['z'] + hover_height)
-            )
+            resolved.append((
+                f'{name}.hover',
+                point['x'], point['y'], point['z'] + hover_height,
+                pitch, roll,
+            ))
     return resolved
 
 
@@ -114,16 +130,16 @@ def main():
 
     failures = []
     tight = []
-    for name, x, y, z in collect_points(layout):
+    for name, x, y, z, point_pitch, point_roll in collect_points(layout, pitch, roll):
         problems = [
             f'{axis}={value:.3f} outside {limits[axis]}'
             for axis, value in (('x', x), ('y', y), ('z', z))
             if not limits[axis][0] <= value <= limits[axis][1]
         ]
 
-        joints = inverse_kinematics(x, y, z, pitch, roll)
+        joints = inverse_kinematics(x, y, z, point_pitch, point_roll)
         radial = math.hypot(x - BASE_OFFSET_X, y)
-        envelope = max_radial(z, pitch, roll)
+        envelope = max_radial(z, point_pitch, point_roll)
         if joints is None:
             problems.append(
                 f'out of reach: needs {radial:.3f} m at z={z:.3f}, '
@@ -138,12 +154,16 @@ def main():
             continue
 
         error = math.dist((x, y, z), forward_kinematics(joints))
+        angles = ''
+        if (point_pitch, point_roll) != (pitch, roll):
+            angles = (f'  at {math.degrees(point_pitch):.0f}/'
+                      f'{math.degrees(point_roll):.0f}deg')
         note = ''
         if radial > envelope * MARGIN:
             note = f'  <- only {(envelope - radial) * 1000:.0f} mm of margin left'
             tight.append(name)
         print(f'ok    {name:22s} ({x:.3f}, {y:.3f}, {z:.3f})  '
-              f'radial {radial:.3f}  err {error * 1e6:.1f} um{note}')
+              f'radial {radial:.3f}  err {error * 1e6:.1f} um{angles}{note}')
 
     print()
     if failures:

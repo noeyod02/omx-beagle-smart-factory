@@ -39,10 +39,14 @@ workspace:
   # reach - re-check with scripts/stock_reach_check.py before raising it.
   hover_height: 0.03
   # Approach angle of the gripper, in degrees. -90 points straight down.
-  # Tilted from -90 on 2026-08-07 to stretch top-down reach for the six-cell
-  # box: at bin height straight-down runs out at 0.254 m radius, -60 reaches
-  # 0.320 m. Every point below was taught at -90 and re-verified at -60 -
-  # teach any NEW point at this same pitch (stock_jog.py --pitch-deg -60).
+  # Tilted from -90 on 2026-08-07 to stretch top-down reach: at bin height
+  # straight-down runs out at 0.254 m radius, -60 reaches 0.320 m.
+  #
+  # These are the DEFAULTS. Any point below may carry its own pitch_deg and
+  # roll_deg - stock_jog.py records them when a point is posed in joint mode -
+  # and the task manager and reach check then use the point's own angles.
+  # A point without them is solved at these values, so it must have been
+  # taught at them (stock_jog.py --pitch-deg -60).
   approach_pitch_deg: -60.0
   # Roll of the gripper about its approach axis, in degrees.
   approach_roll_deg: 0.0
@@ -123,24 +127,40 @@ carrier:
 warehouse:
   pick_points: []
 
-# The destination box - where every part that arrives on the carrier ends up.
+# The destination cells - every part is lifted off the carrier tray (the one
+# pick point above) and placed into whichever of these was asked for.
 #   place: where the gripper releases a part into it, in robot coordinates.
-#   roi:   the box's rectangle in the camera image [x1, y1, x2, y2], in pixels.
-#          Fill this in with scripts/stock_calibrate.py.
+#          May carry pitch_deg/roll_deg (see approach_pitch_deg above).
+#   roi:   the cell's rectangle in the camera image [x1, y1, x2, y2], in
+#          pixels. Fill this in with scripts/stock_calibrate.py.
 #
-# One entry, not three. This cell has a single destination box at station B,
-# and the two extra bins this file used to carry were invented coordinates that
-# no gripper had ever been driven to - they passed the reach check and would
-# have failed at the box.
+# Only points a gripper has actually been driven to belong here: the invented
+# coordinates this file once carried passed the reach check and would have
+# failed at the box. Teach each cell with the jog pointed at station B
+# (command at the top of this file), save it under the cell's name, then copy
+# the line from ~/.ros/stock_points_b.yaml into its entry here and rerun
+# scripts/stock_reach_check.py.
 bins:
-  # Re-taught 2026-08-06 (fourth pass, after the arm base moved) as 'drop',
-  # down inside the box rather than releasing from the air above it, so the
-  # part is set in rather than dropped. The jaws open to 86 mm at this depth,
-  # so the box mouth has to clear that; it was taught with the gripper in the
-  # box, so it does.
+  # Taught 2026-08-06 (fourth pass, after the arm base moved) as 'drop' for
+  # what was then the only destination box, down inside it rather than
+  # releasing from the air above, so the part is set in rather than dropped.
+  # The jaws open to 86 mm at this depth, so the cell mouth has to clear that.
+  # RE-VERIFY against cell a before trusting it: the coordinate predates the
+  # three-cell arrangement, and an empty run to it proves nothing has moved.
   #
-  # The roi is still a placeholder: the camera at this station has not been
-  # aimed or calibrated, so nothing reads this yet.
-  - id: bin1
+  # The rois are still placeholders: the camera at this station has not been
+  # aimed or calibrated, so nothing reads them yet.
+  - id: bin_a
     place: {x: 0.056, y: -0.180, z: 0.073}
     roi: [80, 90, 200, 210]
+  # Cells b and c have no taught coordinates yet - the drop2/drop3 points in
+  # ~/.ros/stock_points_b.yaml are the same physical spot saved twice, and
+  # drop5 is a folded pose at the base, so none of them describe these cells.
+  # Teach them as above, then fill these in and delete this comment:
+  #
+  # - id: bin_b
+  #   place: {x: 0.0, y: 0.0, z: 0.0, pitch_deg: -60.0, roll_deg: 0.0}
+  #   roi: [0, 0, 0, 0]
+  # - id: bin_c
+  #   place: {x: 0.0, y: 0.0, z: 0.0, pitch_deg: -60.0, roll_deg: 0.0}
+  #   roi: [0, 0, 0, 0]

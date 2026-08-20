@@ -192,10 +192,13 @@ class StockTaskManager(Node):
         self.gripper_effort = float(gripper['max_effort'])
 
         home = workspace['home']
-        self.home = self._solve('home', home['x'], home['y'], home['z'], 'transit')
+        self.home = self._solve(
+            'home', home['x'], home['y'], home['z'], 'transit', *self._angles(home)
+        )
         transit = workspace['transit']
         self.transit = self._solve(
-            'transit', transit['x'], transit['y'], transit['z'], 'transit'
+            'transit', transit['x'], transit['y'], transit['z'], 'transit',
+            *self._angles(transit)
         )
 
         self.pick_points = [
@@ -228,7 +231,24 @@ class StockTaskManager(Node):
 
         return layout
 
-    def _solve(self, name, x, y, z, duration_key):
+    def _angles(self, point):
+        """The approach angles a point carries, or None to use the defaults.
+
+        A point taught in the jog's joint mode records the pitch and roll it
+        was posed at; replaying it at the workspace default instead puts the
+        wrist in a pose nobody ever saw at that spot.
+        """
+        pitch = (
+            math.radians(float(point['pitch_deg']))
+            if 'pitch_deg' in point else None
+        )
+        roll = (
+            math.radians(float(point['roll_deg']))
+            if 'roll_deg' in point else None
+        )
+        return pitch, roll
+
+    def _solve(self, name, x, y, z, duration_key, pitch=None, roll=None):
         """Turn a cartesian point into a Waypoint, failing loudly if unreachable."""
         for axis, value in (('x', x), ('y', y), ('z', z)):
             low, high = self.limits[axis]
@@ -238,7 +258,11 @@ class StockTaskManager(Node):
                     f'range [{low}, {high}]'
                 )
 
-        joints = inverse_kinematics(x, y, z, pitch=self.pitch, roll=self.roll)
+        joints = inverse_kinematics(
+            x, y, z,
+            pitch=self.pitch if pitch is None else pitch,
+            roll=self.roll if roll is None else roll,
+        )
         if joints is None:
             raise RuntimeError(
                 f"{name}: ({x:.3f}, {y:.3f}, {z:.3f}) is out of the arm's reach"
@@ -250,14 +274,21 @@ class StockTaskManager(Node):
 
         Both are resolved now rather than when a job starts, so an unreachable
         layout is caught at startup instead of stranding the arm mid-motion.
+        The hover shares the point's angles: the descent is a straight drop
+        along the approach the point was taught with.
         """
-        target = self._solve(name, point['x'], point['y'], point['z'], 'descend')
+        pitch, roll = self._angles(point)
+        target = self._solve(
+            name, point['x'], point['y'], point['z'], 'descend', pitch, roll
+        )
         target.hover = self._solve(
             f'{name}.hover',
             point['x'],
             point['y'],
             point['z'] + self.hover_height,
             'approach',
+            pitch,
+            roll,
         )
         return target
 
