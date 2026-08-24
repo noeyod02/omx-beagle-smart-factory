@@ -134,8 +134,10 @@ warehouse:
     # Re-taught 2026-08-20 as 'warehouse', at -85 rather than straight
     # down. Same spot twice: the list is a consumption budget, one entry
     # per run per launch, restocked by hand between runs.
-    - {x: 0.2252, y: 0.0002, z: 0.0964, pitch_deg: -85.0, roll_deg: 0.0}
-    - {x: 0.2252, y: 0.0002, z: 0.0964, pitch_deg: -85.0, roll_deg: 0.0}
+    # z lowered 0.0964 -> 0.0864 on 2026-08-24: the replacement arm closed
+    # on air at the taught height (width trace hit the commanded 0.27).
+    - {x: 0.2252, y: 0.0002, z: 0.0864, pitch_deg: -85.0, roll_deg: 0.0}
+    - {x: 0.2252, y: 0.0002, z: 0.0864, pitch_deg: -85.0, roll_deg: 0.0}
 
 # Station A has no stock bins of its own.
 bins: []
