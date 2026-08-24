@@ -128,14 +128,15 @@ def generate_launch_description():
             default_value=default_route,
             description='Routes the carrier drives between the two bays',
         ),
-        # The by-id paths of the two boards in this cell, as read on
-        # 2026-08-04. They are stable across reboots where /dev/ttyACM0 and
-        # /dev/ttyACM2 are not, which is why they are spelled out in full.
+        # The by-id paths of the two boards in this cell. They are stable
+        # across reboots where /dev/ttyACM0 and /dev/ttyACM2 are not, which is
+        # why they are spelled out in full.
         #
         # Which board drives which station is not something the boards can be
         # asked - both enumerate identically as an OpenRB-150 - so it was
-        # established at the cell and written down here: 0B4ABF0E is the
-        # warehouse arm, station A.
+        # established at the cell and written down here: 7B6CC642 is the
+        # warehouse arm, station A (the original 0B4ABF0E arm was replaced on
+        # 2026-08-24).
         #
         # Should the boards ever be swapped between stations, swapping these
         # two values is the whole fix. Nothing else in the relay refers to a
@@ -144,7 +145,7 @@ def generate_launch_description():
             'port_a',
             default_value=(
                 '/dev/serial/by-id/'
-                'usb-ROBOTIS_OpenRB-150_0B4ABF0E5157375037202020FF102616-if00'
+                'usb-ROBOTIS_OpenRB-150_7B6CC6425157375037202020FF101B14-if00'
             ),
             description="Serial port of station A's arm, the warehouse side",
         ),
