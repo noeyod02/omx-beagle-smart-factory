@@ -44,13 +44,17 @@ from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     declared_arguments = [
-        # The by-id path of the board on PC2, read on 2026-08-07. Stable
-        # across reboots where /dev/ttyACM0 is not.
+        # The by-id path of the board on PC2. Stable across reboots where
+        # /dev/ttyACM0 is not. Re-read 2026-08-24: the board plugged at PC2
+        # is 1825F0CB now, not the E314414A read on 2026-08-07 - the arms
+        # were shuffled when station A's was replaced. If the 2026-08-21
+        # taught points miss, suspect the hardware swap first (A's needed
+        # its pick lowered 10 mm after the same shuffle).
         DeclareLaunchArgument(
             'port_c',
             default_value=(
                 '/dev/serial/by-id/'
-                'usb-ROBOTIS_OpenRB-150_E314414A5157375037202020FF0D1A2C-if00'
+                'usb-ROBOTIS_OpenRB-150_1825F0CB5157375037202020FF0D102A-if00'
             ),
             description="Serial port of station C's arm",
         ),
