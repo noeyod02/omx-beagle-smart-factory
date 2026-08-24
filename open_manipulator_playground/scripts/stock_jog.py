@@ -31,7 +31,8 @@ Teaching positions
     ros2 run open_manipulator_playground stock_jog.py
 
 Keys:
-    w / s    forward / back   (+x / -x)
+    x / y / z    pick the axis w / s drive (x when the tool starts)
+    w / s    picked axis + / -  (so +x / -x until another axis is picked)
     a / d    left / right     (+y / -y)
     r / f    up / down        (+z / -z)
     m        switch cartesian <-> joint mode
@@ -151,6 +152,9 @@ class Jogger(Node):
         self.start = (args.x, args.y, args.z)
         self.point = list(self.start)
         self.step_index = DEFAULT_STEP_INDEX
+        # Which axis w/s drive in cartesian mode; picked with the x/y/z keys.
+        # 0 keeps the old behaviour (w/s always meant +x/-x) until one is picked.
+        self.axis_index = 0
         # Joint mode: nudge one joint at a time, no IK in the way. The last
         # commanded joints are remembered by every move, so switching modes
         # continues from wherever the arm is.
@@ -332,8 +336,9 @@ class Jogger(Node):
                 f'grip {gap_mm(self.gripper_open):.0f}/'
                 f'{gap_mm(self.gripper_closed):.0f} mm      '
             )
+        marks = ['*' if i == self.axis_index else ' ' for i in range(3)]
         return (
-            f'\r  x {x:+.3f}  y {y:+.3f}  z {z:+.3f}   '
+            f'\r {marks[0]}x {x:+.3f} {marks[1]}y {y:+.3f} {marks[2]}z {z:+.3f}   '
             f'step {self.step * 1000:.0f} mm   '
             f'grip {gap_mm(self.gripper_open):.0f}/{gap_mm(self.gripper_closed):.0f} mm   '
             f'recorded {len(self.recorded)}      '
@@ -587,6 +592,15 @@ def main():
                     )
                 elif node.mode == 'joint' and key in moves:
                     notice('joint mode: w/s move the joint picked with 1..5; m returns')
+                elif node.mode == 'cartesian' and key in ('x', 'y', 'z'):
+                    node.axis_index = 'xyz'.index(key)
+                elif key in ('w', 's'):
+                    # w/s drive whichever axis x/y/z picked last; the a/d and
+                    # r/f pairs below stay hard-wired to y and z regardless.
+                    sign = +1 if key == 'w' else -1
+                    target = list(node.point)
+                    target[node.axis_index] += sign * node.step
+                    node.move_to(*target)
                 elif key in moves:
                     axis, sign = moves[key]
                     target = list(node.point)
