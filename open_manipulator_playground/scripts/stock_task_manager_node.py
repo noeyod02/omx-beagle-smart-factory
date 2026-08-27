@@ -462,7 +462,12 @@ class StockTaskManager(Node):
             ('arm', pick.hover),
             ('arm', pick),
             ('gripper', self.gripper_closed),
-            ('arm', pick.hover),
+            # A retreat on the pick side lifts the part clear before the
+            # swing to transit. The hover alone can be pinned low by the
+            # approach pose's IK ceiling (station C's carrier: 20 mm), and
+            # swinging from that height dragged the part across the tray,
+            # ploughing through whatever else stood on it (2026-08-27).
+            ('arm', pick.retreat or pick.hover),
             ('arm', self.transit),
             ('arm', place.hover),
             ('arm', place),
