@@ -1,0 +1,127 @@
+# Layout for station C: the second arm at station B's bay.
+#
+# C faces station B's arm across the six-cell box. This file is the minimum
+# needed to run a job at all - the carrier transfer point and one destination
+# cell - built from the two points taught on 2026-08-21 with stock_jog.py
+# pointed at /station_c. The remaining cells (C owns 4-6) still have to be
+# taught before this station can take real relay work.
+#
+# All coordinates are in metres in THIS arm's link0 (base) frame:
+#   +x forward from the base, +y to the robot's left, +z up.
+# They share nothing with station A's or B's; each arm has its own base.
+#
+# Teach more points with:
+#   ros2 run open_manipulator_playground stock_jog.py \
+#     --arm-action /station_c/arm_controller/follow_joint_trajectory \
+#     --gripper-action /station_c/gripper_controller/gripper_cmd \
+#     --points-file ~/.ros/stock_points_c.yaml
+#
+# Then copy the line from ~/.ros/stock_points_c.yaml into an entry below and
+# rerun scripts/stock_reach_check.py.
+
+workspace:
+  # Via point the arm passes through between picking and placing. carrierc sits
+  # out front and to the right, binc back and to the left, so the carry swings
+  # right across the front of the base: this point holds it high and central
+  # while it does. Not yet checked against real obstacles between the two - see
+  # the note in the README of this run.
+  # Raised 0.180 -> 0.210 (and pulled in to x 0.130, which is what buys the
+  # height - at x 0.150 the -90 wrist tops out at z 0.20) so the carry over
+  # to bin_c swings higher. 2026-08-27, probed: x 0.130 solves up to z 0.22.
+  transit: {x: 0.130, y: 0.000, z: 0.210}
+  # Height the gripper hovers above a target before descending onto it.
+  hover_height: 0.03
+  # Defaults, used only by points that carry no angles of their own. Both
+  # points below were taught in joint mode and carry their own pitch_deg and
+  # roll_deg, so these apply to transit and home alone.
+  approach_pitch_deg: -90.0
+  approach_roll_deg: 0.0
+  # Pose the arm returns to between jobs.
+  home: {x: 0.124, y: 0.0, z: 0.15}
+
+  # Hard limits; every waypoint is checked against these at startup.
+  limits:
+    x: [0.05, 0.28]
+    y: [-0.20, 0.20]
+    z: [0.02, 0.22]
+
+  # Seconds per motion. Deliberately slower than station B's: nothing at this
+  # station has been driven end to end yet.
+  durations:
+    transit: 4.0
+    approach: 3.0
+    descend: 3.0
+    gripper: 1.5
+
+# Measured at this gripper on this part, 2026-08-21, in the jog session that
+# taught the two points below:
+#     gap_mm = 100 * joint + 10
+# The jog reported these as the gripper block to copy across.
+gripper:
+  # open widened 0.36 -> 0.76 on 2026-08-24: 46 mm left ~3 mm a side around
+  # the part and the first carrier pick came away empty. 0.76 (86 mm) is the
+  # width station B has proven at the same tray and the same cell box.
+  open_position: 0.76    # 86 mm
+  # narrowed 0.24 -> 0.20 on 2026-08-27: at 0.24 the first real carry
+  # started stalled at 0.37 but slid down to 0.256 mid-swing - the jaws were
+  # not far enough past the part's rest width to keep hold of it once it
+  # shifted. 0.20 commands 30 mm at a part that stalls the jaws near 47 mm.
+  # narrowed again 0.20 -> 0.17 on 2026-08-27: at 0.20 the part still
+  # rolled to its thin (~32 mm) dimension mid-carry. 27 mm sits under that
+  # thin dimension too, so the jaws keep a bite whichever way it rolls.
+  # 0.17 -> 0.15 -> 0.12 on 2026-08-27 at the cell, to bite deeper under
+  # the part.
+  closed_position: 0.12  # 22 mm
+  max_effort: 10.0
+
+# Where this arm lifts a part off the Beagle's tray, in THIS arm's frame.
+# Re-taught 2026-08-24 as 'carrierc', on the shuffled hardware (board
+# 1825F0CB). The 2026-08-21 point sat at radial 0.290 m, the very edge of
+# this arm's reach, and needed its pitch relaxed to -65/-55 just to buy the
+# hover an IK solution; this one sits at radial 0.175 m - the pull-inward
+# fix that note asked for - so the pitch could come back to a proper tilt.
+# pitch relaxed -100 -> -85: the taught -100 is this point's exact IK
+# ceiling - not even a 5 mm hover above it solves - so the task manager
+# cannot approach at that tilt at all. -85 keeps the same x/y/z and buys
+# the full 30 mm hover (probed 2026-08-24). If the grasp needs the steeper
+# tilt back, the point has to be re-taught closer to the base instead.
+# Re-taught 2026-08-27 as 'carrierc' at the cell. The taught -100 pitch is
+# past this point's IK ceiling - no hover height solves there at all - and
+# -92 is the closest angle that buys a 20 mm hover, so the approach runs at
+# -92 with hover pinned to 0.020 (the workspace default 0.03 has no solution
+# either).
+carrier:
+  # retreat: after the grasp, lift straight up to transit height (0.210)
+  # with the wrist relaxed to -75 - the first pitch that solves there -
+  # so the swing to bin_c starts level instead of dragging the part
+  # across the tray at hover height (added 2026-08-27; needs the pick-side
+  # retreat step in stock_task_manager_node).
+  transfer: {x: 0.1641, y: -0.0839, z: 0.1580, pitch_deg: -92.0, roll_deg: -30.0, hover: 0.020,
+             retreat: {z: 0.210, pitch_deg: -75.0}}
+
+# Station C fetches from the carrier, never from a warehouse of its own.
+warehouse:
+  pick_points: []
+
+# Destination cells. Only one taught so far.
+#   place: where the gripper releases a part into it.
+#   roi:   the cell's rectangle in the camera image, in pixels. No camera has
+#          been aimed at station C yet, so this is a placeholder nothing reads.
+bins:
+  # Re-taught 2026-08-27 as 'binc'.
+  - id: bin_c
+    # hover raised to the pose's IK ceiling (z 0.200, probed 2026-08-27) so
+    # the swing in from transit (z 0.210) stays level and the descent onto
+    # the cell is vertical - the default 0.03 hover put the arm on a long
+    # diagonal that sank mid-path.
+    place: {x: 0.0535, y: 0.1359, z: 0.0790, pitch_deg: -100.0, roll_deg: 60.0, hover: 0.121}
+    roi: [0, 0, 0, 0]
+  # Taught 2026-08-27 as 'bind'. Same rule as bin_c: hover pinned so the
+  # swing in from transit (z 0.210) stays level at z 0.200, then the descent
+  # is vertical (this pose solves all the way up - the cap is convention,
+  # not IK).
+  - id: bin_d
+    # y pulled 10 mm toward the beagle side (-0.0408 -> -0.0508) at the cell
+    # on 2026-08-27, to centre the drop in the cell.
+    place: {x: 0.0780, y: -0.0508, z: 0.0648, pitch_deg: -102.0, roll_deg: -120.0, hover: 0.1352}
+    roi: [0, 0, 0, 0]
