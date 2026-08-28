@@ -1,0 +1,24 @@
+# Bin layout for the stock-box camera on PC2 (the second C270, /dev/video2),
+# read by stock_monitor_node.py alone - no arm coordinates live here, only
+# where each cell of the stock box sits in THIS camera's 640x480 image.
+#
+# The monitor runs the relay's presence model (beagle_item_640.pt, class
+# 'item') with empty_class '' - a cell whose region contains an item
+# detection reads filled, one with none reads empty.
+#
+# ROIs are [x1, y1, x2, y2] in pixels. Re-measure them whenever the camera
+# or the box moves: grab a frame, read the cell corners off it, update here.
+# Measured 2026-08-28 off the aimed frame; the a/b/c/d assignment is the
+# user's, given against a numbered overlay of the same frame.
+bins:
+  - id: bin_a
+    # Sits behind station C's arm mount - the parked arm partly occludes it
+    # and the part there scores no 'item' at any confidence. Until the box
+    # or the camera moves, expect this cell to read empty when it is not.
+    roi: [285, 40, 435, 250]
+  - id: bin_b
+    roi: [40, 10, 270, 230]
+  - id: bin_c
+    roi: [80, 230, 265, 465]
+  - id: bin_d
+    roi: [475, 210, 640, 400]

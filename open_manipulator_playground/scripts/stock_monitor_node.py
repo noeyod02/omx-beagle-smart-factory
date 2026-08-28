@@ -29,6 +29,14 @@ Two detection backends are available:
 ``yolo``
     Runs an Ultralytics model that has been trained to tell an empty bin from a
     filled one, and assigns each detection to the bin whose region contains it.
+    With a presence model - one that only knows what a part looks like, like
+    the relay's ``beagle_item_640.pt`` (classes ``beagle``/``item``) - set
+    ``empty_class`` to the empty string: a bin containing a ``filled_class``
+    detection reads filled, and a bin containing none reads empty.
+
+The frames come from ``image_topic`` by default; on a machine with no ROS
+camera node (station C's PC2), set ``device`` to a V4L2 path instead and the
+node captures directly, the way stock_arrival_node does.
 
 Either way a bin has to read the same for several frames in a row before it is
 reported as stable, and readings are ignored entirely while the arm is moving
@@ -96,6 +104,9 @@ class StockMonitor(Node):
 
         self.declare_parameter('layout_file', '')
         self.declare_parameter('image_topic', '/camera1/image_raw')
+        # A V4L2 device path. When set, the node captures from it directly
+        # instead of subscribing to image_topic.
+        self.declare_parameter('device', '')
         self.declare_parameter('status_topic', '/stock/status')
         self.declare_parameter('task_state_topic', '/stock/task_state')
         self.declare_parameter('debug_image_topic', '/stock/debug_image')
@@ -115,6 +126,12 @@ class StockMonitor(Node):
         self.declare_parameter('filled_class', 'filled')
         self.declare_parameter('confidence_threshold', 0.4)
         self.declare_parameter('imgsz', 640)
+        # Predict on each bin's cropped region instead of the full frame.
+        # Costs one inference per bin, but a small part in a wide view can
+        # sit below any usable confidence at full-frame scale (the stock-box
+        # camera: 0.83 for the nearest part, under 0.01 for the farthest;
+        # cropped, every visible part scores 0.6+).
+        self.declare_parameter('predict_per_bin', False)
 
         layout_file = self.get_parameter('layout_file').value
         if not layout_file or not os.path.exists(layout_file):
@@ -162,12 +179,32 @@ class StockMonitor(Node):
                 Image, self.get_parameter('debug_image_topic').value, 1
             )
 
-        self.create_subscription(
-            Image,
-            self.get_parameter('image_topic').value,
-            self._on_image,
-            qos_profile_sensor_data,
-        )
+        device = self.get_parameter('device').value
+        self.capture = None
+        if device:
+            self.capture = cv2.VideoCapture(device, cv2.CAP_V4L2)
+            # On-camera compression: a C270 sending raw YUYV over-reserves
+            # USB2 bandwidth and starves any other camera on the same hub.
+            self.capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+            # We read at rate_hz, far under the camera's frame rate; without
+            # this the driver queue serves seconds-old frames.
+            self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            if not self.capture.isOpened():
+                raise RuntimeError(
+                    f'camera {device!r} would not open (held by cctv_server '
+                    f'or another node? V4L2 devices cannot be shared)'
+                )
+            self.create_timer(
+                1.0 / max(1e-3, float(self.get_parameter('rate_hz').value)),
+                self._on_capture_timer,
+            )
+        else:
+            self.create_subscription(
+                Image,
+                self.get_parameter('image_topic').value,
+                self._on_image,
+                qos_profile_sensor_data,
+            )
         self.create_subscription(
             String,
             self.get_parameter('task_state_topic').value,
@@ -238,12 +275,24 @@ class StockMonitor(Node):
         self.get_logger().info(f'Captured empty-bin reference to {path}')
 
     def _on_image(self, msg):
-        """Evaluate every bin in the frame, at the configured rate."""
+        """Evaluate a frame arriving over the image topic."""
         try:
             frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
         except Exception as exc:  # noqa: BLE001 - cv_bridge raises broadly
             self.get_logger().warn(f'Could not convert image: {exc}')
             return
+        self._process_frame(frame)
+
+    def _on_capture_timer(self):
+        """Evaluate a frame captured directly from the V4L2 device."""
+        ok, frame = self.capture.read()
+        if not ok:
+            self.get_logger().warn('camera read failed; retrying')
+            return
+        self._process_frame(frame)
+
+    def _process_frame(self, frame):
+        """Evaluate every bin in the frame, at the configured rate."""
         self.last_frame = frame
 
         now = self.get_clock().now().nanoseconds / 1e9
@@ -325,6 +374,29 @@ class StockMonitor(Node):
         conf_threshold = float(self.get_parameter('confidence_threshold').value)
         imgsz = int(self.get_parameter('imgsz').value)
 
+        if bool(self.get_parameter('predict_per_bin').value):
+            readings = {}
+            for tracker in self.trackers:
+                crop = self._crop(frame, tracker.roi)
+                result = self.model.predict(
+                    crop, imgsz=imgsz, conf=conf_threshold, verbose=False
+                )[0]
+                best_state, best_conf = None, 0.0
+                for box in result.boxes:
+                    label = self.class_names.get(int(box.cls[0]), '')
+                    if label not in (empty_class, filled_class):
+                        continue
+                    confidence = float(box.conf[0])
+                    if confidence > best_conf:
+                        best_state = (STATE_EMPTY if label == empty_class
+                                      else STATE_FILLED)
+                        best_conf = confidence
+                if best_state is None and not empty_class:
+                    best_state, best_conf = STATE_EMPTY, 1.0
+                if best_state is not None:
+                    readings[tracker.bin_id] = (best_state, best_conf)
+            return readings
+
         results = self.model.predict(
             frame, imgsz=imgsz, conf=conf_threshold, verbose=False
         )
@@ -344,6 +416,13 @@ class StockMonitor(Node):
                 if bin_id not in best or confidence > best[bin_id][1]:
                     state = STATE_EMPTY if label == empty_class else STATE_FILLED
                     best[bin_id] = (state, confidence)
+        if not empty_class:
+            # Presence model: nothing detected in a bin's region IS the
+            # empty reading - there is no 'empty' class to see. Absence is
+            # only as trustworthy as the view, so the stable_frames debounce
+            # and the vision_clear gate above carry the weight here.
+            for tracker in self.trackers:
+                best.setdefault(tracker.bin_id, (STATE_EMPTY, 1.0))
         return best
 
     def _bin_at(self, point):
