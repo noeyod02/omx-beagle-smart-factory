@@ -43,7 +43,11 @@ workspace:
   approach_pitch_deg: -90.0
   approach_roll_deg: 0.0
   # Pose the arm returns to between jobs.
-  home: {x: 0.124, y: 0.0, z: 0.15}
+  # Crouched right down against the base (2026-08-28): B's carry clipped
+  # this arm's old half-extended idle pose (x 0.124, z 0.15). Idle is now
+  # fully tucked - gripper 55 mm out, 45 mm up, wrist curled under - and
+  # the arm only rises through transit while working.
+  home: {x: 0.055, y: 0.0, z: 0.045, pitch_deg: -140.0, roll_deg: 0.0}
 
   # Hard limits; every waypoint is checked against these at startup.
   limits:

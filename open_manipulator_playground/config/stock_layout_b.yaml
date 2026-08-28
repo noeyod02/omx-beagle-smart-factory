@@ -53,7 +53,11 @@ workspace:
   approach_roll_deg: 0.0
   # Pose the arm returns to between jobs. Keep it out of the camera's view of
   # the bins, and clear of the bay so the Beagle can drive in and out.
-  home: {x: 0.124, y: 0.0, z: 0.15}
+  # Crouched right down against the base (2026-08-28): B and C face each
+  # other across the cell box, and B's carry clipped C's old half-extended
+  # idle pose. Both arms now idle fully tucked - gripper 55 mm out, 45 mm
+  # up, wrist curled under - and only rise through transit while working.
+  home: {x: 0.055, y: 0.0, z: 0.045, pitch_deg: -140.0, roll_deg: 0.0}
 
   # Hard limits; every waypoint is checked against these at startup.
   # x reaches below zero since 2026-08-20: cell b was taught at x=-0.036,
