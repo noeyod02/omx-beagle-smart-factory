@@ -203,6 +203,12 @@ class StockTaskManager(Node):
             'transit', transit['x'], transit['y'], transit['z'], 'transit',
             *self._angles(transit)
         )
+        # Whether the loaded carry passes through the transit point. Stations
+        # whose transit sits opposite the place direction (station C: transit
+        # at y=0, bins at -y) waste a there-and-back swing with the part in
+        # the jaws; with pick retreats and place hovers already level, the
+        # carry can go straight. Empty-handed legs always use the transit.
+        self.carry_via_transit = bool(workspace.get('carry_via_transit', True))
 
         self.pick_points = [
             self._solve_target(f'warehouse[{i}]', p)
@@ -468,7 +474,7 @@ class StockTaskManager(Node):
             # swinging from that height dragged the part across the tray,
             # ploughing through whatever else stood on it (2026-08-27).
             ('arm', pick.retreat or pick.hover),
-            ('arm', self.transit),
+            *([('arm', self.transit)] if self.carry_via_transit else []),
             ('arm', place.hover),
             ('arm', place),
             ('gripper', self.gripper_open),

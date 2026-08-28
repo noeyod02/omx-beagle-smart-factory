@@ -29,6 +29,12 @@ workspace:
   # height - at x 0.150 the -90 wrist tops out at z 0.20) so the carry over
   # to bin_c swings higher. 2026-08-27, probed: x 0.130 solves up to z 0.22.
   transit: {x: 0.130, y: 0.000, z: 0.210}
+  # The loaded carry skips the transit (2026-08-28): transit sits at y=0 but
+  # both the pick and bin_d are at -y, so passing through it swung the part
+  # AWAY from the bin and back again. The pick retreat and the place hovers
+  # all top out level at z 0.200, so the direct swing is already flat.
+  # Empty-handed legs (out to the pick, back home) still go through it.
+  carry_via_transit: false
   # Height the gripper hovers above a target before descending onto it.
   hover_height: 0.03
   # Defaults, used only by points that carry no angles of their own. Both
@@ -96,8 +102,12 @@ carrier:
   # so the swing to bin_c starts level instead of dragging the part
   # across the tray at hover height (added 2026-08-27; needs the pick-side
   # retreat step in stock_task_manager_node).
-  transfer: {x: 0.1641, y: -0.0839, z: 0.1580, pitch_deg: -92.0, roll_deg: -30.0, hover: 0.020,
-             retreat: {z: 0.210, pitch_deg: -75.0}}
+  # Grasp pulled 10 mm outward, away from the base (x 0.1641 -> 0.1741) at
+  # the cell 2026-08-27. Farther out the IK tightens: pitch eased -92 -> -88
+  # (first angle whose 20 mm hover still solves out there) and the retreat
+  # top dropped 0.210 -> 0.200 (its ceiling at -75 at this radius).
+  transfer: {x: 0.1741, y: -0.0839, z: 0.1580, pitch_deg: -88.0, roll_deg: -30.0, hover: 0.020,
+             retreat: {z: 0.200, pitch_deg: -75.0}}
 
 # Station C fetches from the carrier, never from a warehouse of its own.
 warehouse:
@@ -121,7 +131,26 @@ bins:
   # is vertical (this pose solves all the way up - the cap is convention,
   # not IK).
   - id: bin_d
-    # y pulled 10 mm toward the beagle side (-0.0408 -> -0.0508) at the cell
-    # on 2026-08-27, to centre the drop in the cell.
-    place: {x: 0.0780, y: -0.0508, z: 0.0648, pitch_deg: -102.0, roll_deg: -120.0, hover: 0.1352}
+    # Re-taught 2026-08-27 (second pass): further toward the beagle side and
+    # noticeably higher (z 0.110) - the raised drop also takes gravity load
+    # off joint4, which was latching overload on the earlier, lower pose.
+    # hover keeps the level-swing rule: in from transit at z 0.200.
+    # y eased 10 mm back away from the beagle (-0.124 -> -0.114) before the
+    # drop, 2026-08-27 at the cell.
+    # Rotated 3 deg further around the base (joint1 -56.8 -> -59.8, same
+    # radius: x 0.0745 -> 0.0684, y -0.1140 -> -0.1177) for the release,
+    # 2026-08-28 at the cell. IK solves at the place and the 0.200 hover.
+    # Lowered 20 mm (z 0.1103 -> 0.0903) 2026-08-28: the high release was
+    # tossing the part and it landed imprecisely. The height had been raised
+    # to spare joint4, but j4 is now run as-is (latched or not), so the
+    # release can sit just above the cell. IK solves down to 0.075 here.
+    # Pushed 15 mm radially outward (r 0.136 -> 0.151, same bearing:
+    # x 0.0684 -> 0.0760, y -0.1177 -> -0.1307) 2026-08-28: the release sat
+    # close enough to the OMX base plate that the part caught its corner and
+    # toppled. Same pitch still solves out here (its hover ceiling starts
+    # failing at +20 mm; -90 buys +30 mm if more clearance is ever needed).
+    # roll -50 -> -60 (2026-08-28): the part was landing ~10 deg diagonal in
+    # the cell; seen from above it needed a counter-clockwise twist, which on
+    # the downward-pointing tool axis is roll minus.
+    place: {x: 0.0760, y: -0.1307, z: 0.0903, pitch_deg: -98.0, roll_deg: -60.0, hover: 0.1097}
     roi: [0, 0, 0, 0]
