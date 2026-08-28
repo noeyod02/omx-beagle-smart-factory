@@ -471,7 +471,16 @@ class StockMonitor(Node):
                 canvas, 'arm in view - paused', (10, 20),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2, cv2.LINE_AA
             )
-        self.debug_pub.publish(self.bridge.cv2_to_imgmsg(canvas, encoding='bgr8'))
+        # Assembled by hand instead of cv_bridge.cv2_to_imgmsg: on a machine
+        # where pip (ultralytics) shadowed the system cv2, cv_bridge's type
+        # table no longer matches and it dies with KeyError: 16.
+        msg = Image()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.height, msg.width = canvas.shape[:2]
+        msg.encoding = 'bgr8'
+        msg.step = msg.width * 3
+        msg.data = canvas.tobytes()
+        self.debug_pub.publish(msg)
 
 
 def main(args=None):
