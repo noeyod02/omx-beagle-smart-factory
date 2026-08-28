@@ -57,7 +57,10 @@ workspace:
   # other across the cell box, and B's carry clipped C's old half-extended
   # idle pose. Both arms now idle fully tucked - gripper 55 mm out, 45 mm
   # up, wrist curled under - and only rise through transit while working.
-  home: {x: 0.055, y: 0.0, z: 0.045, pitch_deg: -140.0, roll_deg: 0.0}
+  # joint2 folded right back (2026-08-28, second pass): pitch -90 at this
+  # point solves with the shoulder leaned -72 deg, which drops the whole
+  # arm below the stock camera's view.
+  home: {x: 0.055, y: 0.0, z: 0.035, pitch_deg: -90.0, roll_deg: 0.0}
 
   # Hard limits; every waypoint is checked against these at startup.
   # x reaches below zero since 2026-08-20: cell b was taught at x=-0.036,
