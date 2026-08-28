@@ -65,7 +65,10 @@ class StockArrival(Node):
         super().__init__('stock_arrival')
 
         self.declare_parameter('model_path', '')
-        self.declare_parameter('video_device', 0)
+        # A V4L2 index ('0'), a device path, or an MJPEG stream URL. The URL
+        # form lets this node share a camera that cctv_server already holds
+        # (V4L2 devices are exclusive; the HTTP stream is not).
+        self.declare_parameter('video_device', '0')
         self.declare_parameter('frame_width', 640)
         self.declare_parameter('frame_height', 480)
         # x1, y1, x2, y2 in pixels of the bay, measured with get_roi-style
@@ -188,6 +191,8 @@ class StockArrival(Node):
     def _watch(self):
         """Their detect_arrival.py loop, minus the file and the window."""
         device = self.get_parameter('video_device').value
+        if isinstance(device, str) and device.isdigit():
+            device = int(device)
         cap = cv2.VideoCapture(device)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.get_parameter('frame_width').value)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.get_parameter('frame_height').value)
