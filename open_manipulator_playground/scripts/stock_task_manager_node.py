@@ -113,6 +113,15 @@ class StockTaskManager(Node):
         self.declare_parameter('request_topic', '/stock/refill_request')
         self.declare_parameter('transfer_topic', '/stock/transfer')
         self.declare_parameter('restock_topic', '/stock/restock')
+        # Whether the warehouse pick points start over once they run out.
+        #
+        # Off, the count is a one-way tally: every job spends a taught point
+        # and the station refuses jobs once they are gone, however full the
+        # box actually is. That is the right answer when nothing else can see
+        # the box. When a camera watches it and the approval refuses on what
+        # the camera reads, this tally is a second, blind gate - and it is the
+        # one that stops a cell whose box was refilled between jobs.
+        self.declare_parameter('warehouse_cycles', False)
         self.declare_parameter('state_topic', '/stock/task_state')
         self.declare_parameter('auto_refill', True)
         self.declare_parameter('cooldown_sec', 5.0)
@@ -137,6 +146,7 @@ class StockTaskManager(Node):
         self.current_job = None
         self.cooldown_until = 0.0
         self.next_pick_index = 0
+        self.warehouse_cycles = bool(self.get_parameter('warehouse_cycles').value)
         # Identifies the running job and reports how the last one ended, so a
         # coordinator can tell its own job's outcome from somebody else's.
         self.job_id = 0
@@ -427,7 +437,16 @@ class StockTaskManager(Node):
             if not self.pick_points:
                 raise LookupError('this station has no warehouse')
             if self.next_pick_index >= len(self.pick_points):
-                raise LookupError('the warehouse is empty')
+                if not self.warehouse_cycles:
+                    raise LookupError('the warehouse is empty')
+                # The count only ever falls, and it is blind: it says the box
+                # is empty because this node handed out every taught point
+                # once, not because anyone looked. With a camera watching the
+                # box - and refusing the job when it reads empty - that count
+                # is the wrong thing to refuse on, and refusing on it stops a
+                # cell whose box was refilled between jobs.
+                self.next_pick_index = 0
+                self.get_logger().info('warehouse points exhausted - starting over')
             return self.pick_points[self.next_pick_index]
         if name == 'carrier':
             if self.carrier is None:
