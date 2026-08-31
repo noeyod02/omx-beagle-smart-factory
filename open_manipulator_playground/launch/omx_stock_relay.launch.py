@@ -53,7 +53,8 @@ from launch_ros.actions import PushRosNamespace
 from launch_ros.substitutions import FindPackageShare
 
 
-def _arm(namespace, port, layout, gripper_mode, start_robot, use_mock_hardware):
+def _arm(namespace, port, layout, gripper_mode, start_robot, use_mock_hardware,
+         warehouse_cycles='false'):
     """One station: the arm's bringup and its task manager, in a namespace.
 
     The bringup is namespaced rather than prefixed. Prefixing renames the
@@ -87,6 +88,7 @@ def _arm(namespace, port, layout, gripper_mode, start_robot, use_mock_hardware):
         parameters=[{
             'layout_file': layout,
             'gripper_mode': gripper_mode,
+            'warehouse_cycles': warehouse_cycles,
             # The relay is the only thing that gives these arms work: each one
             # reaches just one end of a job, so a bare bin name means nothing
             # here, and reacting to the camera directly would have an arm grasp
@@ -218,6 +220,24 @@ def generate_launch_description():
             description='Where the empty-bin reference photo is kept',
         ),
         DeclareLaunchArgument(
+            'start_relay',
+            default_value='true',
+            description=(
+                'Run the relay that sequences both arms and the carrier. Turn '
+                'it off when the dashboard backend is conducting instead - two '
+                'conductors cancel each other mid-job.'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'warehouse_cycles',
+            default_value='false',
+            description=(
+                "Let station A's warehouse pick points start over when they "
+                'run out, instead of refusing work. Right when a camera is '
+                'watching the box and refusing the job itself.'
+            ),
+        ),
+        DeclareLaunchArgument(
             'gripper_mode',
             default_value='action',
             description="'action' for the omx_f bringup, 'joint' for the AI follower",
@@ -292,6 +312,8 @@ def generate_launch_description():
         '/station_a', LaunchConfiguration('port_a'),
         LaunchConfiguration('layout_a'), gripper_mode, start_robots,
         use_mock_hardware,
+        # Only station A has a warehouse, so only station A can run out of one.
+        warehouse_cycles=LaunchConfiguration('warehouse_cycles'),
     )
     station_b = _arm(
         '/station_b', LaunchConfiguration('port_b'),
@@ -343,6 +365,11 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('start_beagle')),
     )
 
+    # The relay is one of two things that can conduct this cell; the
+    # dashboard's backend is the other, and it drives the same task managers
+    # over MQTT. Two conductors means two transfers into one task manager,
+    # and the second cancels the first mid-trajectory. Turn this off whenever
+    # the dashboard is driving.
     relay = Node(
         package='open_manipulator_playground',
         executable='stock_relay_node.py',
@@ -352,6 +379,7 @@ def generate_launch_description():
             'station_a_ns': '/station_a',
             'station_b_ns': '/station_b',
         }],
+        condition=IfCondition(LaunchConfiguration('start_relay')),
     )
 
     # Sees the carrier arrive at station A's bay and starts the warehouse

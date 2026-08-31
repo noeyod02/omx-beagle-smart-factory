@@ -1,0 +1,15 @@
+/**:
+  ros__parameters:
+    layout_file: /home/itec/ros2_ws/src/open_manipulator/open_manipulator_playground/config/stock_bins_cam.yaml
+    device: /dev/v4l/by-path/pci-0000:00:14.0-usb-0:10:1.0-video-index0
+    backend: yolo
+    model_path: /home/itec/yolo_project/beagle_item_640.pt
+    empty_class: ""
+    filled_class: item
+    confidence_threshold: 0.1
+    predict_per_bin: true
+    imgsz: 640
+    rate_hz: 0.5
+    stable_frames: 3
+    task_state_topic: /station_c/stock/task_state
+    publish_debug_image: true

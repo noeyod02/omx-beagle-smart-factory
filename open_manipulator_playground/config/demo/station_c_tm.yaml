@@ -1,0 +1,10 @@
+/station_c/stock_task_manager:
+  ros__parameters:
+    layout_file: /home/itec/ros2_ws/src/open_manipulator/open_manipulator_playground/config/stock_layout_c.yaml
+    gripper_mode: action
+    auto_refill: false
+    request_topic: ""
+    arm_action: arm_controller/follow_joint_trajectory
+    gripper_action: gripper_controller/gripper_cmd
+    transfer_topic: stock/transfer
+    state_topic: stock/task_state

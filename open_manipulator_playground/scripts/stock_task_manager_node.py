@@ -113,6 +113,12 @@ class StockTaskManager(Node):
         self.declare_parameter('request_topic', '/stock/refill_request')
         self.declare_parameter('transfer_topic', '/stock/transfer')
         self.declare_parameter('restock_topic', '/stock/restock')
+        # A job that fails parks the station: it stops taking work rather than
+        # carrying on past a step nobody saw finish. Until this existed the
+        # only way out was restarting the node, which is a strange thing to
+        # ask of whoever is standing at the dashboard when the cause was a
+        # cancelled goal that left the arm exactly where it started.
+        self.declare_parameter('resume_topic', '/stock/resume')
         # Whether the warehouse pick points start over once they run out.
         #
         # Off, the count is a one-way tally: every job spends a taught point
@@ -185,6 +191,9 @@ class StockTaskManager(Node):
         # front of the camera. This puts the count back without a restart.
         self.create_subscription(
             Empty, self.get_parameter('restock_topic').value, self._on_restock, 10
+        )
+        self.create_subscription(
+            Empty, self.get_parameter('resume_topic').value, self._on_resume, 10
         )
 
         self._report_layout()
@@ -393,6 +402,26 @@ class StockTaskManager(Node):
     def _on_request(self, msg):
         """Handle a refill asked for by hand: warehouse to the named bin."""
         self._start_transfer('warehouse', msg.data.strip())
+
+    def _on_resume(self, msg):
+        """Take work again after a failure parked the station.
+
+        Only the refusal is lifted; nothing is retried and no arm moves. The
+        job that failed stays failed in last_job, so whoever asked for it
+        still learns it did not happen - this says 'the cell is usable again',
+        not 'that worked after all'.
+
+        Refused while busy: a resume mid-job would say the station is free
+        when an arm is mid-trajectory.
+        """
+        del msg  # std_msgs/Empty carries nothing
+        if self.state == STATE_BUSY:
+            self.get_logger().warn('resume ignored: the arm is mid-job')
+            return
+        if self.state != STATE_BLOCKED:
+            return  # already taking work
+        self.state = STATE_IDLE
+        self.get_logger().info('resumed - taking work again')
 
     def _on_restock(self, msg):
         """Declare the warehouse full again: the box has been refilled by hand.
