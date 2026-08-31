@@ -102,6 +102,12 @@ def _arm(namespace, port, layout, gripper_mode, start_robot, use_mock_hardware,
             'gripper_action': 'gripper_controller/gripper_cmd',
             'transfer_topic': 'stock/transfer',
             'state_topic': 'stock/task_state',
+            # Relative for the same reason as the two above: the node's own
+            # defaults are absolute, so under a namespace they would land on
+            # a global topic that no station owns - the bridge would publish
+            # to /station_a/stock/resume and the arm would hear nothing.
+            'restock_topic': 'stock/restock',
+            'resume_topic': 'stock/resume',
         }],
     )
 

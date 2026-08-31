@@ -8,3 +8,7 @@
     gripper_action: gripper_controller/gripper_cmd
     transfer_topic: stock/transfer
     state_topic: stock/task_state
+    # 상대 이름: 노드 기본값은 절대경로라 네임스페이스 안에서도 전역 토픽에
+    # 붙는다 — 브리지는 /station_c/stock/resume로 보내는데 팔은 못 듣게 된다.
+    restock_topic: stock/restock
+    resume_topic: stock/resume
