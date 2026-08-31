@@ -25,7 +25,9 @@
 # than it sounds - a second task manager for the same station takes the same
 # job and the two fight over the arm, which reads as "the robot ignored the
 # dashboard" (2026-08-31).
-set -uo pipefail
+# -u는 쓰지 않는다: ROS의 setup.bash가 미설정 변수를 참조해서, 켜 두면
+# 환경을 읽는 순간 스크립트가 죽는다.
+set -o pipefail
 
 PC2=10.101.49.215
 REPO=/home/itec/open_manipulator

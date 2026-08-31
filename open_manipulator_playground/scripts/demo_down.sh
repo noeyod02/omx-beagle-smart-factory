@@ -5,7 +5,9 @@
 # the retained state the dashboard reads on the way back up, and restarting
 # the container means waiting through the Beagle's connect and gyro
 # calibration again for no reason.
-set -uo pipefail
+# -u는 쓰지 않는다: ROS의 setup.bash가 미설정 변수를 참조해서, 켜 두면
+# 환경을 읽는 순간 스크립트가 죽는다.
+set -o pipefail
 
 PC2=10.101.49.215
 
