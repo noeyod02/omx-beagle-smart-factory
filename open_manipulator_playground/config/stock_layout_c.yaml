@@ -131,7 +131,19 @@ bins:
     # the swing in from transit (z 0.210) stays level and the descent onto
     # the cell is vertical - the default 0.03 hover put the arm on a long
     # diagonal that sank mid-path.
-    place: {x: 0.0535, y: 0.1359, z: 0.0790, pitch_deg: -100.0, roll_deg: 60.0, hover: 0.121}
+    # x pushed 25 mm out from the base (0.0535 -> 0.0685 -> 0.0785),
+    # 2026-08-31: at the taught x the part clipped the arm's mounting
+    # bracket and toppled (same failure as bin_d's corner clip), and at
+    # +15 it still came to rest ON the bracket's edge.
+    # pitch stays at the taught -100: easing it to -92 to keep the z 0.200
+    # hover solvable stood the gripper up at the release, which swung the
+    # part's bottom back toward the bracket and toppled it again - the
+    # attitude is what keeps the drop clear, not just the radius. The
+    # reach is bought back at the hover instead: 0.121 -> 0.101 (z 0.180),
+    # the tallest height that solves at -100 out here with margin. The
+    # loaded swing arrives at z 0.200 and sinks 20 mm on approach - mild
+    # next to the 0.03-hover diagonal this cell's note warns about.
+    place: {x: 0.0785, y: 0.1359, z: 0.0790, pitch_deg: -100.0, roll_deg: 60.0, hover: 0.101}
     roi: [0, 0, 0, 0]
   # Taught 2026-08-27 as 'bind'. Same rule as bin_c: hover pinned so the
   # swing in from transit (z 0.210) stays level at z 0.200, then the descent
