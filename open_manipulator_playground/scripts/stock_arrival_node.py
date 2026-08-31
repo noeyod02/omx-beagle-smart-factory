@@ -50,7 +50,7 @@ import time
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool, Empty, String
 
 try:
     import cv2
@@ -73,7 +73,11 @@ class StockArrival(Node):
         self.declare_parameter('frame_height', 480)
         # x1, y1, x2, y2 in pixels of the bay, measured with get_roi-style
         # dragging on a frame from the same camera at the same resolution.
-        self.declare_parameter('roi', [179, 142, 486, 410])
+        # Re-measured 2026-08-31 after the camera was re-aimed: the previous
+        # [179, 142, 486, 410] then framed a keyboard, and a carrier parked in
+        # plain sight read as an empty bay. A wrong roi fails this way round -
+        # silently, as absence - so re-measure it whenever the camera moves.
+        self.declare_parameter('roi', [130, 0, 390, 170])
         self.declare_parameter('confidence', 0.6)
         self.declare_parameter('target_class', 'beagle')
         self.declare_parameter('need_frames', 8)
@@ -85,6 +89,36 @@ class StockArrival(Node):
         self.declare_parameter('lost_frames', 45)
         self.declare_parameter('arrived_topic', '/stock/beagle_arrived')
         self.declare_parameter('debug_topic', '/stock/arrival_image/compressed')
+
+        # Station readiness. The dashboard approves a refill before anything
+        # moves, and an approval is only worth acting on if this bay actually
+        # holds both halves of the job: a part to pick and a carrier to put it
+        # on. The same frame already shows both, so the answer is free here -
+        # anywhere else it would need a second reader of an exclusive camera.
+        #
+        # Reported, never enforced: this node does not gate its own trigger on
+        # it. Whoever asks for a job decides what to do with the answer.
+        self.declare_parameter('ready_topic', '/stock/station_a_ready')
+        self.declare_parameter('station_id', 'station-a')
+        self.declare_parameter('part_class', 'item')
+        # Where a part waits to be picked. All zeros means the whole frame,
+        # which is right until something part-shaped sits outside the box.
+        # (An empty default cannot be used: rclpy would infer BYTE_ARRAY from
+        # it and then refuse the four integers this is meant to hold.)
+        # The warehouse box sits to the right of the bay in the 2026-08-31
+        # framing; measured off the same frame as roi above.
+        self.declare_parameter('part_roi', [420, 40, 640, 420])
+        # Parts stand still, so presence needs far fewer frames than an
+        # arrival, and losing them for a moment behind the arm is not news.
+        self.declare_parameter('part_need_frames', 3)
+        self.declare_parameter('part_lost_frames', 8)
+        # A part lying flat reads far weaker than a standing one (the model
+        # was trained on standing boxes), so this sits below the carrier's.
+        self.declare_parameter('part_confidence', 0.1)
+        # Restock: when the box has been refilled but the arm still believes
+        # it emptied it, the count is what refuses the job, not the camera.
+        # Seeing a part again where the arm reports none puts the count back.
+        self.declare_parameter('restock_topic', '/station_a/stock/restock')
 
         # The trigger. An empty transfer_topic turns it off, leaving a node
         # that only reports.
@@ -125,8 +159,23 @@ class StockArrival(Node):
                 f'it knows {sorted(names.values())}'
             )
 
+        part_class = self.get_parameter('part_class').value
+        self.part_ids = {i for i, n in names.items() if n == part_class}
+        if not self.part_ids:
+            self.get_logger().warn(
+                f'model has no class named {part_class!r} ({sorted(names.values())}); '
+                f'readiness will always report no part'
+            )
+
         self.arrived_pub = self.create_publisher(
             Bool, self.get_parameter('arrived_topic').value, 10
+        )
+        self.ready_pub = self.create_publisher(
+            String, self.get_parameter('ready_topic').value, 10
+        )
+        restock_topic = self.get_parameter('restock_topic').value
+        self.restock_pub = (
+            self.create_publisher(Empty, restock_topic, 10) if restock_topic else None
         )
         debug_topic = self.get_parameter('debug_topic').value
         self.debug_pub = None
@@ -135,22 +184,30 @@ class StockArrival(Node):
             self._CompressedImage = CompressedImage
             self.debug_pub = self.create_publisher(CompressedImage, debug_topic, 1)
 
+        # Subscribed even with the trigger off: readiness needs to know when
+        # the arm is reaching over the bay (its detections are the arm, not
+        # the cell) and how many parts the arm still believes it has.
+        self.create_subscription(
+            String, self.get_parameter('task_state_topic').value,
+            self._on_task_state, 10,
+        )
+
         self.transfer_topic = self.get_parameter('transfer_topic').value
         self.transfer_pub = None
         if self.transfer_topic:
             self.transfer_pub = self.create_publisher(String, self.transfer_topic, 10)
-            self.create_subscription(
-                String, self.get_parameter('task_state_topic').value,
-                self._on_task_state, 10,
-            )
             self.create_subscription(
                 String, self.get_parameter('relay_state_topic').value,
                 self._on_relay_state, 10,
             )
 
         self.arm_state = None       # last JSON 'state' from the task manager
+        self.arm_parts_left = None  # its warehouse count, None until heard
         self.relay_state = None     # last JSON 'state' from the relay, if any
         self.arrived = False
+        self.part_present = False   # a part is waiting in the warehouse
+        self.part_conf = 0.0        # confidence of the last part sighting
+        self.last_restock = 0.0
         self.seen_away = self.get_parameter('trigger_on_initial').value
         self.last_trigger = 0.0
         self.job_seq = 9000  # far from the relay's own sequence numbers
@@ -168,14 +225,22 @@ class StockArrival(Node):
             f'>= {self.get_parameter("confidence").value}, trigger '
             f'{"-> " + self.transfer_topic if self.transfer_pub else "off"}'
         )
+        self.get_logger().info(
+            f'Readiness on {self.get_parameter("ready_topic").value}: '
+            f'carrier + class {part_class!r} at conf >= '
+            f'{self.get_parameter("part_confidence").value}'
+        )
 
     # ------------------------------------------------------------ listening
 
     def _on_task_state(self, msg):
         try:
-            self.arm_state = json.loads(msg.data).get('state')
+            state = json.loads(msg.data)
         except json.JSONDecodeError:
-            pass
+            return
+        self.arm_state = state.get('state')
+        left = state.get('parts_left')
+        self.arm_parts_left = int(left) if isinstance(left, (int, float)) else None
 
     def _on_relay_state(self, msg):
         try:
@@ -185,6 +250,42 @@ class StockArrival(Node):
 
     def _heartbeat(self):
         self.arrived_pub.publish(Bool(data=self.arrived))
+        self._publish_readiness()
+        self._reconcile_warehouse_count()
+
+    def _publish_readiness(self):
+        """Say whether this bay can serve a refill right now, and why not."""
+        self.ready_pub.publish(String(data=json.dumps({
+            'stamp': time.time(),
+            'station': self.get_parameter('station_id').value,
+            'ready': bool(self.arrived and self.part_present),
+            'checks': {'beagle': bool(self.arrived), 'part': bool(self.part_present)},
+            'part_confidence': round(float(self.part_conf), 3),
+            'source': 'yolo',
+        })))
+
+    def _reconcile_warehouse_count(self):
+        """Tell the arm the box was refilled, when the camera can see it was.
+
+        The arm's count of the warehouse only falls, so a box refilled by hand
+        leaves it refusing jobs at a full box. The camera is the thing that
+        knows better, and this is the only place both facts meet.
+
+        Requires a stably-seen part and an idle arm claiming none left, so a
+        part still in the gripper mid-job cannot be counted as stock.
+        """
+        if self.restock_pub is None or not self.part_present:
+            return
+        if self.arm_parts_left != 0 or self.arm_state != 'idle':
+            return
+        now = time.monotonic()
+        if now - self.last_restock < 10.0:
+            return
+        self.last_restock = now
+        self.restock_pub.publish(Empty())
+        self.get_logger().info(
+            'warehouse holds a part but the arm counted none - restocking it'
+        )
 
     # ------------------------------------------------------------- watching
 
@@ -205,7 +306,17 @@ class StockArrival(Node):
         need = int(self.get_parameter('need_frames').value)
         lost = int(self.get_parameter('lost_frames').value)
 
+        part_roi = list(self.get_parameter('part_roi').value)
+        part_roi = part_roi if any(part_roi) else None
+        part_conf = float(self.get_parameter('part_confidence').value)
+        part_need = int(self.get_parameter('part_need_frames').value)
+        part_lost = int(self.get_parameter('part_lost_frames').value)
+        # One inference serves both questions, so it has to run at the lower
+        # of the two thresholds and each verdict filters the boxes itself.
+        infer_conf = min(conf, part_conf) if self.part_ids else conf
+
         hit = miss = 0
+        part_hit = part_miss = 0
         frame_no = 0
         while not self._stop.is_set():
             ok, frame = cap.read()
@@ -214,16 +325,23 @@ class StockArrival(Node):
                 time.sleep(1.0)
                 continue
 
-            result = self.model(frame, imgsz=640, conf=conf, verbose=False)[0]
+            result = self.model(frame, imgsz=640, conf=infer_conf, verbose=False)[0]
             detected = False
+            part_seen = 0.0
             for box in result.boxes:
-                if int(box.cls) not in self.target_ids:
-                    continue
+                cls, score = int(box.cls), float(box.conf)
                 x1, y1, x2, y2 = box.xyxy[0].tolist()
                 cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-                if roi[0] <= cx <= roi[2] and roi[1] <= cy <= roi[3]:
-                    detected = True
-                    break
+                if cls in self.target_ids and score >= conf:
+                    if roi[0] <= cx <= roi[2] and roi[1] <= cy <= roi[3]:
+                        detected = True
+                elif cls in self.part_ids and score >= part_conf:
+                    inside = part_roi is None or (
+                        part_roi[0] <= cx <= part_roi[2]
+                        and part_roi[1] <= cy <= part_roi[3]
+                    )
+                    if inside:
+                        part_seen = max(part_seen, score)
 
             # While the arm is working it reaches over the bay and hides the
             # carrier from the camera. Whatever the model sees during that
@@ -232,12 +350,28 @@ class StockArrival(Node):
             # actually moving; blocked or cooldown is an arm parked at home,
             # in full view of nothing, and freezing on those left the watch
             # blind after a refused job (2026-08-07).
-            if self.transfer_pub is not None and self.arm_state == 'busy':
+            if self.arm_state == 'busy':
                 hit = miss = 0
-            elif detected:
-                hit, miss = hit + 1, 0
+                part_hit = part_miss = 0
             else:
-                hit, miss = 0, miss + 1
+                if detected:
+                    hit, miss = hit + 1, 0
+                else:
+                    hit, miss = 0, miss + 1
+                if part_seen:
+                    part_hit, part_miss = part_hit + 1, 0
+                else:
+                    part_hit, part_miss = 0, part_miss + 1
+
+            if part_seen:
+                self.part_conf = part_seen
+            if not self.part_present and part_hit >= part_need:
+                self.part_present = True
+                self.get_logger().info(f'part in the warehouse ({part_seen:.2f})')
+            elif self.part_present and part_miss >= part_lost:
+                self.part_present = False
+                self.part_conf = 0.0
+                self.get_logger().info('warehouse looks empty')
 
             if not self.arrived and not self.seen_away and miss >= lost:
                 # Starting over an empty bay is as good as watching the
@@ -262,6 +396,14 @@ class StockArrival(Node):
                 cv2.putText(
                     vis, f'arrived={self.arrived} hit={hit} miss={miss}',
                     (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, colour, 2,
+                )
+                ready = self.arrived and self.part_present
+                cv2.putText(
+                    vis,
+                    f'part={self.part_present} ({self.part_conf:.2f})  '
+                    f'ready={ready}',
+                    (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                    (0, 200, 0) if ready else (0, 165, 255), 2,
                 )
                 ok, jpeg = cv2.imencode('.jpg', vis, [cv2.IMWRITE_JPEG_QUALITY, 70])
                 if ok:

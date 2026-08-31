@@ -58,7 +58,7 @@ import rclpy
 from rclpy.action import ActionClient
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from std_msgs.msg import String
+from std_msgs.msg import Empty, String
 from trajectory_msgs.msg import JointTrajectoryPoint
 import yaml
 
@@ -112,6 +112,7 @@ class StockTaskManager(Node):
         self.declare_parameter('status_topic', '/stock/status')
         self.declare_parameter('request_topic', '/stock/refill_request')
         self.declare_parameter('transfer_topic', '/stock/transfer')
+        self.declare_parameter('restock_topic', '/stock/restock')
         self.declare_parameter('state_topic', '/stock/task_state')
         self.declare_parameter('auto_refill', True)
         self.declare_parameter('cooldown_sec', 5.0)
@@ -166,6 +167,14 @@ class StockTaskManager(Node):
             )
         self.create_subscription(
             String, self.get_parameter('transfer_topic').value, self._on_transfer, 10
+        )
+        # The warehouse count is decided once, when this node reads the layout,
+        # and only ever falls. Restocking the box by hand used to mean
+        # restarting the node - which in a dashboard-driven cell means an
+        # approved job dying on 'the warehouse is empty' with a full box in
+        # front of the camera. This puts the count back without a restart.
+        self.create_subscription(
+            Empty, self.get_parameter('restock_topic').value, self._on_restock, 10
         )
 
         self._report_layout()
@@ -374,6 +383,29 @@ class StockTaskManager(Node):
     def _on_request(self, msg):
         """Handle a refill asked for by hand: warehouse to the named bin."""
         self._start_transfer('warehouse', msg.data.strip())
+
+    def _on_restock(self, msg):
+        """Declare the warehouse full again: the box has been refilled by hand.
+
+        Only the count is reset. The pick points themselves are unchanged, so
+        this says 'there is a part at every taught spot again' - which is what
+        refilling the box means, and is the same claim the node makes for
+        itself at startup.
+        """
+        del msg  # std_msgs/Empty carries nothing
+        if not self.pick_points:
+            self.get_logger().warn('restock ignored: this station has no warehouse')
+            return
+        if self.state == STATE_BUSY:
+            # Mid-job the index is pointing at the part being carried right
+            # now; moving it would hand the next job the same point twice.
+            self.get_logger().warn('restock ignored: the arm is mid-job')
+            return
+        was = max(0, len(self.pick_points) - self.next_pick_index)
+        self.next_pick_index = 0
+        self.get_logger().info(
+            f'warehouse restocked: {was} -> {len(self.pick_points)} parts'
+        )
 
     def _on_transfer(self, msg):
         """Handle a transfer between two named places, as a relay asks for."""
