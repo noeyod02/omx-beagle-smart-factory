@@ -54,7 +54,7 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def _arm(namespace, port, layout, gripper_mode, start_robot, use_mock_hardware,
-         warehouse_cycles='false'):
+         warehouse_cycles=False):
     """One station: the arm's bringup and its task manager, in a namespace.
 
     The bringup is namespaced rather than prefixed. Prefixing renames the

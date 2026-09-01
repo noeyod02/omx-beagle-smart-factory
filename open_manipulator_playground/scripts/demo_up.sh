@@ -106,7 +106,10 @@ status() {
 
   # A duplicate task manager answers every check above exactly like a healthy
   # one, and only shows itself as jobs that cancel each other.
-  dupes=$(pgrep -fc "install/open_manipulator_playground/lib/open_manipulator_playground/${TM_PAT}" 2>/dev/null || echo 0)
+  # pgrep -fc prints "0" AND exits nonzero when nothing matches, so `|| echo 0`
+  # would append a second line and break the -le test below.
+  dupes=$(pgrep -fc "install/open_manipulator_playground/lib/open_manipulator_playground/${TM_PAT}" 2>/dev/null)
+  dupes=${dupes:-0}
   [ "$dupes" -le 2 ] && ok "태스크 매니저 중복 없음" || bad "태스크 매니저가 $dupes 개 - 중복!"
 }
 
