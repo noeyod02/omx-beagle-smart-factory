@@ -115,20 +115,39 @@ status() {
 
 if [ "${1:-}" = "--status" ]; then status; exit 0; fi
 
+# 같은 스크립트가 두 벌 겹쳐 돌면 태스크 매니저가 두 개씩 떠서, 하나의 작업을
+# 둘이 나눠 잡고 서로의 궤적을 취소한다 (2026-09-01 실측: 사람과 도우미가 1분
+# 간격으로 각자 실행). 그래서 실행 자체를 잠금으로 하나로 제한한다.
+exec 200>/tmp/demo_up.lock
+if ! flock -n 200; then
+  echo "demo_up.sh가 이미 실행 중이다 - 그쪽이 끝나기를 기다릴 것. (두 벌이 겹치면 태스크 매니저가 중복된다)"
+  exit 1
+fi
+
 say "0/7  이전 프로세스 정리"
 stop_local "$RELAY_PAT"; stop_local "$TM_PAT"; stop_local "$ARRIVAL_PAT"
 stop_local "$(printf '%s%s' 'mqtt_bri' 'dge/lib')"
 stop_local "$(printf '%s%s' 'ros_mjpeg' '_server')"
 stop_local "$(printf '%s%s' 'cctv_ser' 'ver.py')"
 stop_local "app.main:app"
+# launch 래퍼와 상태 퍼블리셔까지 지운다. ros2_control_node만 죽이면 launch가
+# 고아 자식(robot_state_publisher)을 남기고, 다음 기동과 이름이 겹친다.
+stop_local "$(printf '%s%s' 'omx_stock_re' 'lay.launch')"
 stop_local "ros2_control_node"
-ssh "$PC2" "pkill -f $MONITOR_PAT; pkill -f $TM_PAT; pkill -f ros2_control_node; pkill -f cctv_server; true" >/dev/null 2>&1
+stop_local "robot_state_publisher"
+# 프론트(vite)도 지운다 - 안 지우면 새 vite가 5174로 조용히 비켜 앉아,
+# 화면은 5173의 낡은 코드를 계속 보여준다.
+stop_local "node_modules/.bin/vite"
+ssh "$PC2" "pkill -f $MONITOR_PAT; pkill -f $TM_PAT; pkill -f omx_station_c; \
+  pkill -f ros2_control_node; pkill -f robot_state_publisher; pkill -f cctv_server; true" >/dev/null 2>&1
 sleep 2; ok "정리 완료"
 
-say "1/7  MQTT 브로커"
+say "1/7  MQTT 브로커 + 컨테이너"
 docker start t1be-mosquitto >/dev/null 2>&1
+docker start open_manipulator >/dev/null 2>&1   # 비글 브리지가 이 안에서 돈다
 sleep 1
 ss -ltn | grep -q ':1883 ' && ok "1883 대기 중" || bad "브로커가 안 떴다"
+docker ps --format '{{.Names}}' | grep -q open_manipulator && ok "비글 컨테이너" || bad "비글 컨테이너가 안 떴다"
 
 say "2/7  비글 브리지 (팔보다 먼저)"
 docker exec open_manipulator bash -c "pkill -f beagle_bridge_node; true" >/dev/null 2>&1
@@ -155,10 +174,16 @@ nohup ros2 launch open_manipulator_playground omx_stock_relay.launch.py \
   start_beagle:=false start_camera:=false start_monitor:=false start_arrival:=false \
   start_relay:=false warehouse_cycles:=true > "$LOGS/arms_pc1.log" 2>&1 &
 disown
+# 'Controllers ready'는 태스크 매니저 하나당 한 줄이다. 두 대(A·B)가 다 떠야
+# 성공이다 - 첫 줄에서 끝내면 B의 태스크 매니저가 죽어도 성공으로 보인다
+# (2026-09-01 실측: B만 launch 인자 타입 버그로 매번 죽는데 기동은 ok로 표시).
 for _ in $(seq 1 24); do
-  grep -q 'Controllers ready' "$LOGS/arms_pc1.log" 2>/dev/null && break || sleep 5
+  ready=$(grep -c 'Controllers ready' "$LOGS/arms_pc1.log" 2>/dev/null)
+  [ "${ready:-0}" -ge 2 ] && break || sleep 5
 done
-grep -c 'Controllers ready' "$LOGS/arms_pc1.log" >/dev/null && ok "A·B 기동" || bad "A·B 기동 실패 - $LOGS/arms_pc1.log"
+ready=$(grep -c 'Controllers ready' "$LOGS/arms_pc1.log" 2>/dev/null)
+[ "${ready:-0}" -ge 2 ] && ok "A·B 기동 (태스크 매니저 ${ready}개)" \
+  || bad "A·B 기동 불완전 (태스크 매니저 ${ready:-0}/2) - $LOGS/arms_pc1.log"
 
 say "4/7  PC2 팔 (C) + 태스크 매니저"
 ssh -f "$PC2" "source /opt/ros/jazzy/setup.bash && source $PC2_WS/install/setup.bash && \
@@ -198,9 +223,18 @@ nohup ros2 run open_manipulator_playground stock_arrival_node.py --ros-args \
 disown
 nohup python3 "$HW/scripts/ros_mjpeg_server.py" > "$LOGS/mjpeg.log" 2>&1 &
 disown
-sleep 6
-curl -sf -m 4 -o /dev/null http://127.0.0.1:8899/cam/cam-warehouse.mjpg && ok "창고 카메라" || bad "창고 카메라"
-curl -sf -m 4 -o /dev/null "http://$PC2:8899/cam/cam-overview.mjpg" && ok "전체뷰 카메라" || bad "전체뷰 카메라"
+# 카메라 서버는 뜬 뒤에도 장치 열기~첫 프레임까지 몇 초가 더 걸린다. 한 번에
+# 찔러보면 정상인데도 FAIL로 읽힌다 (2026-09-01 검증 주행에서 오탐 2건).
+wait_stream() {
+  local url="$1" name="$2"
+  for _ in $(seq 1 8); do
+    curl -sf -m 4 -o /dev/null "$url" && { ok "$name"; return 0; }
+    sleep 3
+  done
+  bad "$name"
+}
+wait_stream http://127.0.0.1:8899/cam/cam-warehouse.mjpg "창고 카메라"
+wait_stream "http://$PC2:8899/cam/cam-overview.mjpg" "전체뷰 카메라"
 ssh "$PC2" "grep -q 'Stock monitor started' /tmp/stock_monitor.log" && ok "재고 판정" || bad "재고 판정"
 
 say "6/7  대시보드 (백엔드·프론트·MQTT 브리지)"

@@ -39,11 +39,13 @@ stop "$(printf '%s%s' 'ros_mjpeg' '_server')" "A라인 스트림"
 stop "$(printf '%s%s' 'cctv_ser' 'ver.py')" "창고 카메라"
 stop "app.main:app" "백엔드"
 stop "vite" "대시보드"
+stop "$(printf '%s%s' 'omx_stock_re' 'lay.launch')" "팔 launch"
 stop "ros2_control_node" "팔 컨트롤러"
+stop "robot_state_publisher" "상태 퍼블리셔"
 stop "$(printf '%s%s' 'all_cams' '_view')" "로컬 카메라 창"
 
 echo "== PC2"
-ssh "$PC2" "for p in $MONITOR_PAT $TM_PAT ros2_control_node robot_state_publisher cctv_server; do
+ssh "$PC2" "for p in $MONITOR_PAT $TM_PAT omx_station_c ros2_control_node robot_state_publisher cctv_server; do
   pkill -f \$p 2>/dev/null; done; true"
 echo "   stopped PC2 노드들"
 
