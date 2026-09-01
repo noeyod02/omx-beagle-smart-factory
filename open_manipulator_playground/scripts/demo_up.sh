@@ -88,7 +88,9 @@ status() {
   docker ps --format '{{.Names}}' | grep -q open_manipulator && ok "비글 컨테이너" || bad "비글 컨테이너"
 
   say "PC2"
-  ssh "$PC2" "pgrep -f $MONITOR_PAT >/dev/null" && ok "재고 카메라 판정" || bad "재고 카메라 판정"
+  # 대괄호 패턴이 아니면 원격 셸의 명령줄 자체가 매칭돼, 죽어 있는 노드도
+  # 항상 ok로 읽힌다 (2026-09-01 실측: 이 거짓 양성이 정리 실패를 가렸다).
+  ssh "$PC2" "pgrep -f 'stock_monitor_nod[e]' >/dev/null" && ok "재고 카메라 판정" || bad "재고 카메라 판정"
   ssh "$PC2" "ss -ltn | grep -q ':8899 '" && ok "전체뷰 카메라" || bad "전체뷰 카메라"
 
   say "로봇"
@@ -138,8 +140,13 @@ stop_local "robot_state_publisher"
 # 프론트(vite)도 지운다 - 안 지우면 새 vite가 5174로 조용히 비켜 앉아,
 # 화면은 5173의 낡은 코드를 계속 보여준다.
 stop_local "node_modules/.bin/vite"
-ssh "$PC2" "pkill -f $MONITOR_PAT; pkill -f $TM_PAT; pkill -f omx_station_c; \
-  pkill -f ros2_control_node; pkill -f robot_state_publisher; pkill -f cctv_server; true" >/dev/null 2>&1
+# 원격 패턴은 대괄호로 자기-매칭을 끊는다: 'nod[e]'는 "node"에는 걸리고
+# 이 명령줄 자신("nod[e]")에는 안 걸린다. 변수로 짜 넣으면 원격 셸의 명령줄에
+# 패턴이 그대로 실려, 첫 pkill이 그 셸을 죽이고 나머지 정리가 전부 건너뛴다
+# (2026-09-01 실측: 이 때문에 PC2에 station_c launch가 두 벌 쌓였다).
+ssh "$PC2" "pkill -f 'stock_monitor_nod[e]'; pkill -f 'stock_task_manager_nod[e]'; \
+  pkill -f 'omx_station_[c]'; pkill -f 'ros2_control_nod[e]'; \
+  pkill -f 'robot_state_publishe[r]'; pkill -f 'cctv_serve[r]'; true" >/dev/null 2>&1
 sleep 2; ok "정리 완료"
 
 say "1/7  MQTT 브로커 + 컨테이너"

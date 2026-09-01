@@ -45,8 +45,12 @@ stop "robot_state_publisher" "상태 퍼블리셔"
 stop "$(printf '%s%s' 'all_cams' '_view')" "로컬 카메라 창"
 
 echo "== PC2"
-ssh "$PC2" "for p in $MONITOR_PAT $TM_PAT omx_station_c ros2_control_node robot_state_publisher cctv_server; do
-  pkill -f \$p 2>/dev/null; done; true"
+# 원격 패턴은 대괄호로 자기-매칭을 끊는다 - 변수로 짜 넣으면 원격 셸의
+# 명령줄에 패턴이 실려, 첫 pkill이 그 셸부터 죽이고 나머지는 산 채로 남는다
+# (2026-09-01 실측: cctv_server와 station_c 전부가 그렇게 살아남았다).
+ssh "$PC2" "pkill -f 'stock_monitor_nod[e]'; pkill -f 'stock_task_manager_nod[e]'; \
+  pkill -f 'omx_station_[c]'; pkill -f 'ros2_control_nod[e]'; \
+  pkill -f 'robot_state_publishe[r]'; pkill -f 'cctv_serve[r]'; true"
 echo "   stopped PC2 노드들"
 
 echo
